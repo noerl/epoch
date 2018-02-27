@@ -36,6 +36,7 @@
 %% API
 -export([ping/2,
          top/1,
+         get_header_by_hash/2,
          get_block/2,
          transactions/1,
          send_tx/2,
@@ -123,6 +124,22 @@ top(Uri) ->
             {error, unexpected_response}
     end.
 
+
+-spec get_header_by_hash(http_uri_uri(), binary()) -> response(aec_headers:header()).
+get_header_by_hash(Uri, Hash) ->
+    EncHash = aec_base58c:encode(block_hash, Hash),
+    Response = process_request(Uri, 'GetHeaderByHash', [{"hash", EncHash}]),
+    case Response of
+        {ok, 200, Data} ->
+            {ok, Header} = aec_headers:deserialize_from_map(Data),
+            {ok, Header};
+        {error, _Reason} = Error ->
+            Error;
+        _ ->
+            %% Should have been turned to {error, _} by swagger validation
+            lager:debug("unexpected response (~p): ~p", [Uri, Response]),
+            {error, unexpected_response}
+    end.
 
 -spec get_block(http_uri_uri(), binary()) -> response(aec_blocks:block()).
 get_block(Uri, Hash) ->
