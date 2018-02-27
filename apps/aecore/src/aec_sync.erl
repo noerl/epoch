@@ -104,7 +104,7 @@ compare_ping_objects(RemoteUri, Local, Remote) ->
                          lager:debug("Our difficulty is higher", []),
                          server_get_missing_blocks(RemoteUri);
                        true ->
-                         start_sync(RemoteUri)
+                         start_sync(RemoteUri, maps:get(<<"best_hash">>, Remote), Dr)
                     end
             end,
             fetch_mempool(RemoteUri),
@@ -114,8 +114,8 @@ compare_ping_objects(RemoteUri, Local, Remote) ->
     end.
 
 
-start_sync(Uri) ->
-    gen_server:cast(?MODULE, {start_sync, Uri}).
+start_sync(Uri, RemoteHash, RemoteDifficulty) ->
+    gen_server:cast(?MODULE, {start_sync, Uri, RemoteHash, RemoteDifficulty}).
 
 server_get_missing_blocks(Uri) ->
     gen_server:cast(?MODULE, {server_get_missing, Uri}).
@@ -126,11 +126,22 @@ fetch_mempool(Uri) ->
 schedule_ping(Uri) ->
     gen_server:cast(?MODULE, {schedule_ping, Uri}).
 
+new_header(Header) ->
+  gen_server:cast(?MODULE, {new_header, Header}).
+
 %%%=============================================================================
 %%% gen_server functions
 %%%=============================================================================
 
--record(state, {}).
+%% When we Ping a node with at least as much difficulty as we have, 
+%% then we are going to sync with it.
+%% We already agree upon the genesis block and need to find the highest common
+%% block we agree upon. We use a binary search to find out.
+%% From the height we agree upon, we start asking a random subset of our peers
+%% (including the new Ping) for blocks on that height+1 until we reach the 
+%% RemoteTop or decide that that is an invalid fork.
+
+-record(state, {best_header}).
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -143,6 +154,7 @@ init([]) ->
     BlockedPeers = application:get_env(aecore, blocked_peers, []),
     [aec_peers:block_peer(P) || P <- BlockedPeers],
     aec_peers:add_and_ping_peers(Peers, true),
+    %% When we start the top_header may still be unknown... it takes some time to build the chain.
     {ok, #state{}}.
 
 handle_call(_, _From, State) ->
@@ -151,8 +163,15 @@ handle_call(_, _From, State) ->
 handle_cast({connect, Uri}, State) ->
     aec_peers:add(Uri, _Connect = true),
     {noreply, State};
-handle_cast({start_sync, Uri}, State) ->
-    jobs:enqueue(sync_jobs, {start_sync, Uri}),
+handle_cast({start_sync, Uri, RemoteHash, RemoteDifficulty}, State) ->
+    case State#state.best_header == undefined orelse RemoteDifficulty > aec_headers:difficulty(State#state.best_header) of
+        false ->
+            %% No need to synchronize, we're already synchronizing with 
+            %% chain that has higher difficulty
+            lager:debug("do not start sync with ~p under ongoing sync", [Uri]);
+        true ->
+            jobs:enqueue(sync_jobs, {start_sync, Uri, RemoteHash})
+    end,
     {noreply, State};
 handle_cast({server_get_missing, Uri}, State) ->
     jobs:enqueue(sync_jobs, {server_get_missing, Uri}),
@@ -163,6 +182,14 @@ handle_cast({fetch_mempool, Uri}, State) ->
 handle_cast({schedule_ping, Uri}, State) ->
     jobs:enqueue(sync_jobs, {ping, Uri}),
     {noreply, State};
+handle_cast({new_header, Header}, State) ->
+    case State#state.best_header == undefined orelse aec_headers:difficulty(Header) > aec_headers:difficulty(State#state.best_header) of
+      true ->
+          lager:debug("Received a header with higher difficulty ~p", [Header]),
+          {noreply, State#state{best_header = Header}};
+      false ->
+          {norepy, State}
+    end;
 handle_cast(_, State) ->
     {noreply, State}.
 
@@ -204,8 +231,8 @@ process_job([{_T, Job}]) ->
             do_forward_block(Block, Uri);
         {forward, #{tx := Tx}, Uri} ->
             do_forward_tx(Tx, Uri);
-        {start_sync, Uri} ->
-            do_start_sync(Uri);
+        {start_sync, Uri, RemoteHash} ->
+            do_start_sync(Uri, RemoteHash);
         {server_get_missing, Uri} ->
             do_server_get_missing(Uri);
         {fetch_mempool, Uri} ->
@@ -278,24 +305,32 @@ do_forward_tx(Tx, Uri) ->
     Res = aeu_requests:send_tx(Uri, Tx),
     lager:debug("send_tx Res (~p): ~p", [Uri, Res]).
 
-do_start_sync(Uri) ->
+do_start_sync(Uri, RemoteHash) ->
     aec_events:publish(chain_sync, {client_start, Uri}),
-    fetch_chain(Uri, aec_chain:genesis_hash()).
+    case aeu_requests:get_header_by_hash(Uri, RemoteHash) of
+        {ok, Hdr} ->
+            lager:debug("New header received (~p): ~p", [Uri, pp(Hdr)]),
+            new_header(Hdr),
+            {ok, Hash} = aec_headers:hash_header(Hdr),
+            fetch_chain(Hash, Uri, aec_chain:genesis_hash(), true, []);
+        {error, Reason} ->
+            lager:debug("fetching top block (~p) failed: ~p", [Uri, Reason])
+    end.
 
 do_server_get_missing(Uri) ->
     aec_events:publish(chain_sync, {server_start, Uri}),
     do_get_missing_blocks(Uri),
     aec_events:publish(chain_sync, {server_done, Uri}).
 
-fetch_chain(Uri, GHash) ->
-    case aeu_requests:top(Uri) of
-        {ok, Hdr} ->
-            lager:debug("Top hdr (~p): ~p", [Uri, pp(Hdr)]),
-            {ok, Hash} = aec_headers:hash_header(Hdr),
-            fetch_chain(Hash, Uri, GHash, true, []);
-        {error, Reason} ->
-            lager:debug("fetching top block (~p) failed: ~p", [Uri, Reason])
-    end.
+%% fetch_chain(Uri, GHash) ->
+%%     case aeu_requests:top(Uri) of
+%%         {ok, Hdr} ->
+%%             lager:debug("Top hdr (~p): ~p", [Uri, pp(Hdr)]),
+%%             {ok, Hash} = aec_headers:hash_header(Hdr),
+%%             fetch_chain(Hash, Uri, GHash, true, []);
+%%         {error, Reason} ->
+%%             lager:debug("fetching top block (~p) failed: ~p", [Uri, Reason])
+%%     end.
 
 %% Fetch the chain, keep track of if we can be connected to genesis.
 %% Initially we can be connected, later we can only be connected
