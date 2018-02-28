@@ -1889,6 +1889,8 @@ definitions:
     properties:
       source:
         type: string
+      pub_key:
+        type: string
       genesis_hash:
         type: string
       best_hash:
@@ -1905,6 +1907,7 @@ definitions:
           maxItems: 32
     required:
     - source
+    - pub_key
     - genesis_hash
     - best_hash
     - difficulty
