@@ -2321,9 +2321,12 @@
     },
     "Ping" : {
       "type" : "object",
-      "required" : [ "best_hash", "difficulty", "genesis_hash", "source" ],
+      "required" : [ "best_hash", "difficulty", "genesis_hash", "pub_key", "source" ],
       "properties" : {
         "source" : {
+          "type" : "string"
+        },
+        "pub_key" : {
           "type" : "string"
         },
         "genesis_hash" : {
@@ -2352,7 +2355,8 @@
         "peers" : [ { }, { } ],
         "best_hash" : "best_hash",
         "share" : 19,
-        "source" : "source"
+        "source" : "source",
+        "pub_key" : "pub_key"
       }
     },
     "Balance" : {
