@@ -126,8 +126,8 @@ fetch_mempool(Uri) ->
 schedule_ping(Uri) ->
     gen_server:cast(?MODULE, {schedule_ping, Uri}).
 
-new_header(Header) ->
-  gen_server:cast(?MODULE, {new_header, Header}).
+new_header(Uri, Header) ->
+  gen_server:cast(?MODULE, {new_header, Uri, Header}).
 
 %%%=============================================================================
 %%% gen_server functions
@@ -141,7 +141,7 @@ new_header(Header) ->
 %% (including the new Ping) for blocks on that height+1 until we reach the 
 %% RemoteTop or decide that that is an invalid fork.
 
--record(state, {best_header}).
+-record(state, {best_header, agree_on_height = 0}).
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -182,11 +182,12 @@ handle_cast({fetch_mempool, Uri}, State) ->
 handle_cast({schedule_ping, Uri}, State) ->
     jobs:enqueue(sync_jobs, {ping, Uri}),
     {noreply, State};
-handle_cast({new_header, Header}, State) ->
-    case State#state.best_header == undefined orelse aec_headers:difficulty(Header) > aec_headers:difficulty(State#state.best_header) of
+handle_cast({new_header, Uri, Header}, State) ->
+    case State#state.best_header == undefined orelse 
+      aec_headers:difficulty(Header) > aec_headers:difficulty(State#state.best_header) of
       true ->
           lager:debug("Received a header with higher difficulty ~p", [Header]),
-          {noreply, State#state{best_header = Header}};
+          {noreply, State#state{best_header = {Header, Uri}}};
       false ->
           {norepy, State}
     end;
@@ -310,7 +311,7 @@ do_start_sync(Uri, RemoteHash) ->
     case aeu_requests:get_header_by_hash(Uri, RemoteHash) of
         {ok, Hdr} ->
             lager:debug("New header received (~p): ~p", [Uri, pp(Hdr)]),
-            new_header(Hdr),
+            new_header(Uri, Hdr),
             {ok, Hash} = aec_headers:hash_header(Hdr),
             fetch_chain(Hash, Uri, aec_chain:genesis_hash(), true, []);
         {error, Reason} ->
