@@ -37,6 +37,7 @@
 -export([ping/2,
          top/1,
          get_header_by_hash/2,
+         get_header_by_height/2,
          get_block/2,
          transactions/1,
          send_tx/2,
@@ -140,6 +141,24 @@ get_header_by_hash(Uri, Hash) ->
             lager:debug("unexpected response (~p): ~p", [Uri, Response]),
             {error, unexpected_response}
     end.
+
+
+%% Add API for header later... now use block
+-spec get_header_by_height(http_uri_uri(), non_neg_integer()) -> response(aec_headers:header()).
+get_header_by_height(Uri, Height) ->
+    Response = process_request(Uri, 'GetBlockByHeight', [{"height", Height}]),
+    case Response of
+        {ok, 200, Data} ->
+            {ok, Block} = aec_headers:deserialize_from_map(Data),
+            {ok, aec_blocks:to_header(Block)};
+        {error, _Reason} = Error ->
+            Error;
+        _ ->
+            %% Should have been turned to {error, _} by swagger validation
+            lager:debug("unexpected response (~p): ~p", [Uri, Response]),
+            {error, unexpected_response}
+    end.
+
 
 -spec get_block(http_uri_uri(), binary()) -> response(aec_blocks:block()).
 get_block(Uri, Hash) ->
