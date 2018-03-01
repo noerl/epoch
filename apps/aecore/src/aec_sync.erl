@@ -323,8 +323,7 @@ do_start_sync(Uri, RemoteHash) ->
                end,
             new_header(Uri, Hdr, AgreedHeight),
             lager:debug("Agreed upon height (~p): ~p", [Uri, AgreedHeight]),
-            {ok, Hash} = aec_headers:hash_header(Hdr),
-            fetch_chain(Hash, Uri, aec_chain:genesis_hash(), true, []);
+            fetch_chain(RemoteHash, Uri, aec_chain:genesis_hash(), true, []);
         {error, Reason} ->
             lager:debug("fetching top block (~p) failed: ~p", [Uri, Reason])
     end.
