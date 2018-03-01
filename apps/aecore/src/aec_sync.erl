@@ -126,8 +126,8 @@ fetch_mempool(Uri) ->
 schedule_ping(Uri) ->
     gen_server:cast(?MODULE, {schedule_ping, Uri}).
 
-new_header(Uri, Header) ->
-  gen_server:cast(?MODULE, {new_header, Uri, Header}).
+new_header(Uri, Header, AgreedHeight) ->
+  gen_server:cast(?MODULE, {new_header, Uri, Header, AgreedHeight}).
 
 %%%=============================================================================
 %%% gen_server functions
@@ -141,7 +141,7 @@ new_header(Uri, Header) ->
 %% (including the new Ping) for blocks on that height+1 until we reach the 
 %% RemoteTop or decide that that is an invalid fork.
 
--record(state, {best_header, agree_on_height = 0}).
+-record(state, {best_header, agreed_on_height = 0}).
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -182,12 +182,12 @@ handle_cast({fetch_mempool, Uri}, State) ->
 handle_cast({schedule_ping, Uri}, State) ->
     jobs:enqueue(sync_jobs, {ping, Uri}),
     {noreply, State};
-handle_cast({new_header, Uri, Header}, State) ->
+handle_cast({new_header, Uri, Header, AgreedHeight}, State) ->
     case State#state.best_header == undefined orelse 
       aec_headers:difficulty(Header) > aec_headers:difficulty(State#state.best_header) of
       true ->
           lager:debug("Received a header with higher difficulty ~p", [Header]),
-          {noreply, State#state{best_header = {Header, Uri}}};
+          {noreply, State#state{best_header = {Header, Uri}, agreed_on_height = AgreedHeight}};
       false ->
           {norepy, State}
     end;
@@ -311,12 +311,57 @@ do_start_sync(Uri, RemoteHash) ->
     case aeu_requests:get_header_by_hash(Uri, RemoteHash) of
         {ok, Hdr} ->
             lager:debug("New header received (~p): ~p", [Uri, pp(Hdr)]),
-            new_header(Uri, Hdr),
+            %% We assume that the top of the chain is a moving target
+            %% Get a hash first and work with that.
+            LocalHeader = aec_chain:top_header(),
+            LocalHeight = aec_headers:height(LocalHeader),
+            AgreedHeight = 
+               case LocalHeight == 0 of
+                    true -> 0;
+                    false ->
+                      agree_on_height(Uri, Hdr,  aec_headers:height(Hdr), LocalHeader, LocalHeight, LocalHeight, 1)
+               end,
+            new_header(Uri, Hdr, AgreedHeight),
+            lager:debug("Agreed upon height (~p): ~p", [Uri, AgreedHeight]),
             {ok, Hash} = aec_headers:hash_header(Hdr),
             fetch_chain(Hash, Uri, aec_chain:genesis_hash(), true, []);
         {error, Reason} ->
             lager:debug("fetching top block (~p) failed: ~p", [Uri, Reason])
     end.
+
+%% Ping logic makes sure they always agree on genesis header (height 0)
+agree_on_height(Uri, RHeader, RH, LHeader, LH, Max, Min) when RH == LH ->
+    lager:debug("Agree on headers ~p", [RHeader == LHeader]),
+    case RHeader == LHeader of
+        true ->
+             %% We agree on a block
+             Middle = (Max + LH) div 2,
+             case Middle < Max of
+               true ->
+                   agree_on_height(Uri, RHeader, RH, aec_chain:get_header_by_height(Middle), Middle, Max, LH);
+               false ->
+                   LH
+             end;
+        false -> 
+             %% We disagree, Local on a fork compared to remote
+             %% check half-way
+             Middle = (Min + LH) div 2,
+             case Middle > Min of
+                 true ->
+                     agree_on_height(Uri, RHeader, RH, aec_chain:get_header_by_height(Middle), Middle, LH, Min);
+                false ->
+                     Min
+             end
+    end;
+agree_on_height(Uri, _, RH, LHeader, LH, Max, Min) when RH =/= LH -> 
+    case aeu_requests:get_header_by_height(Uri, LH) of
+         {ok, RemoteAtHeight} ->
+             lager:debug("New header received (~p): ~p", [Uri, pp(RemoteAtHeight)]),         
+             agree_on_height(Uri, RemoteAtHeight, LH, LHeader, LH, Max, Min);
+         {error, Reason} ->
+             lager:debug("Fetching header ~p from ~p failed: ~p", [LH, Uri, Reason]),
+             Min
+    end.   
 
 do_server_get_missing(Uri) ->
     aec_events:publish(chain_sync, {server_start, Uri}),
