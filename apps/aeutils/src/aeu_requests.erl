@@ -145,11 +145,11 @@ get_header_by_hash(Uri, Hash) ->
 
 %% Add API for header later... now use block
 -spec get_header_by_height(http_uri_uri(), non_neg_integer()) -> response(aec_headers:header()).
-get_header_by_height(Uri, Height) ->
-    Response = process_request(Uri, 'GetBlockByHeight', [{"height", Height}]),
+get_header_by_height(Uri, Height) when is_integer(Height) ->
+    Response = process_request(Uri, 'GetBlockByHeight', [{"height", integer_to_list(Height)}]),
     case Response of
         {ok, 200, Data} ->
-            {ok, Block} = aec_headers:deserialize_from_map(Data),
+            {ok, Block} = aec_blocks:deserialize_from_map(Data),  %% needs to be headers later
             {ok, aec_blocks:to_header(Block)};
         {error, _Reason} = Error ->
             Error;
