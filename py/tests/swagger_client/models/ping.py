@@ -16,7 +16,7 @@ import re  # noqa: F401
 
 import six
 
-from swagger_client.models.uri import Uri  # noqa: F401,E501
+from swagger_client.models.peer import Peer  # noqa: F401,E501
 
 
 class Ping(object):
@@ -34,17 +34,15 @@ class Ping(object):
     """
     swagger_types = {
         'source': 'str',
-        'pub_key': 'str',
         'genesis_hash': 'str',
         'best_hash': 'str',
         'difficulty': 'float',
         'share': 'int',
-        'peers': 'list[Uri]'
+        'peers': 'list[Peer]'
     }
 
     attribute_map = {
         'source': 'source',
-        'pub_key': 'pub_key',
         'genesis_hash': 'genesis_hash',
         'best_hash': 'best_hash',
         'difficulty': 'difficulty',
@@ -52,11 +50,10 @@ class Ping(object):
         'peers': 'peers'
     }
 
-    def __init__(self, source=None, pub_key=None, genesis_hash=None, best_hash=None, difficulty=None, share=None, peers=None):  # noqa: E501
+    def __init__(self, source=None, genesis_hash=None, best_hash=None, difficulty=None, share=None, peers=None):  # noqa: E501
         """Ping - a model defined in Swagger"""  # noqa: E501
 
         self._source = None
-        self._pub_key = None
         self._genesis_hash = None
         self._best_hash = None
         self._difficulty = None
@@ -65,7 +62,6 @@ class Ping(object):
         self.discriminator = None
 
         self.source = source
-        self.pub_key = pub_key
         self.genesis_hash = genesis_hash
         self.best_hash = best_hash
         self.difficulty = difficulty
@@ -96,29 +92,6 @@ class Ping(object):
             raise ValueError("Invalid value for `source`, must not be `None`")  # noqa: E501
 
         self._source = source
-
-    @property
-    def pub_key(self):
-        """Gets the pub_key of this Ping.  # noqa: E501
-
-
-        :return: The pub_key of this Ping.  # noqa: E501
-        :rtype: str
-        """
-        return self._pub_key
-
-    @pub_key.setter
-    def pub_key(self, pub_key):
-        """Sets the pub_key of this Ping.
-
-
-        :param pub_key: The pub_key of this Ping.  # noqa: E501
-        :type: str
-        """
-        if pub_key is None:
-            raise ValueError("Invalid value for `pub_key`, must not be `None`")  # noqa: E501
-
-        self._pub_key = pub_key
 
     @property
     def genesis_hash(self):
@@ -218,7 +191,7 @@ class Ping(object):
 
 
         :return: The peers of this Ping.  # noqa: E501
-        :rtype: list[Uri]
+        :rtype: list[Peer]
         """
         return self._peers
 
@@ -228,7 +201,7 @@ class Ping(object):
 
 
         :param peers: The peers of this Ping.  # noqa: E501
-        :type: list[Uri]
+        :type: list[Peer]
         """
 
         self._peers = peers

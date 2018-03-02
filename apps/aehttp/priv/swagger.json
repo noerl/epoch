@@ -2155,6 +2155,13 @@
     "Uri" : {
       "type" : "string"
     },
+    "NodeId" : {
+      "type" : "string"
+    },
+    "Node" : {
+      "type" : "object"
+    },
+    "Peer" : { },
     "Header" : {
       "type" : "object",
       "properties" : {
@@ -2321,12 +2328,9 @@
     },
     "Ping" : {
       "type" : "object",
-      "required" : [ "best_hash", "difficulty", "genesis_hash", "pub_key", "source" ],
+      "required" : [ "best_hash", "difficulty", "genesis_hash", "source" ],
       "properties" : {
         "source" : {
-          "type" : "string"
-        },
-        "pub_key" : {
           "type" : "string"
         },
         "genesis_hash" : {
@@ -2345,7 +2349,7 @@
         "peers" : {
           "type" : "array",
           "items" : {
-            "$ref" : "#/definitions/Uri"
+            "$ref" : "#/definitions/Peer"
           }
         }
       },
@@ -2355,8 +2359,7 @@
         "peers" : [ { }, { } ],
         "best_hash" : "best_hash",
         "share" : 19,
-        "source" : "source",
-        "pub_key" : "pub_key"
+        "source" : "source"
       }
     },
     "Balance" : {
