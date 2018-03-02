@@ -337,7 +337,8 @@ agree_on_height(Uri, RHeader, RH, LHeader, LH, Max, Min) when RH == LH ->
              Middle = (Max + LH) div 2,
              case Middle < Max of
                true ->
-                   agree_on_height(Uri, RHeader, RH, aec_chain:get_header_by_height(Middle), Middle, Max, LH);
+                   {ok, LocalAtHeight} = aec_chain:get_header_by_height(Middle),
+                   agree_on_height(Uri, RHeader, RH, LocalAtHeight, Middle, Max, LH);
                false ->
                    LH
              end;
@@ -346,9 +347,10 @@ agree_on_height(Uri, RHeader, RH, LHeader, LH, Max, Min) when RH == LH ->
              %% We disagree, Local on a fork compared to remote
              %% check half-way
              Middle = (Min + LH) div 2,
-             case Middle > Min of
+             case Min < Middle of
                  true ->
-                     agree_on_height(Uri, RHeader, RH, aec_chain:get_header_by_height(Middle), Middle, LH, Min);
+                     {ok, LocalAtHeight} = aec_chain:get_header_by_height(Middle),
+                     agree_on_height(Uri, RHeader, RH, LocalAtHeight, Middle, LH, Min);
                 false ->
                      Min
              end
