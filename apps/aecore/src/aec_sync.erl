@@ -342,6 +342,7 @@ agree_on_height(Uri, RHeader, RH, LHeader, LH, Max, Min) when RH == LH ->
                    LH
              end;
         false -> 
+             lager:debug("UNEQUAL: ~p =/= ~p", [RHeader, LHeader]),
              %% We disagree, Local on a fork compared to remote
              %% check half-way
              Middle = (Min + LH) div 2,
