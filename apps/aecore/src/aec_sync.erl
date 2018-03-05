@@ -338,7 +338,7 @@ agree_on_height(Uri, RHeader, RH, LHeader, LH, Max, Min) when RH == LH ->
         true ->
              %% We agree on a block
              Middle = (Max + LH) div 2,
-             case Middle < Max of
+             case Min < Middle andalso Middle < Max of
                true ->
                    {ok, LocalAtHeight} = aec_chain:get_header_by_height(Middle),
                    agree_on_height(Uri, RHeader, RH, LocalAtHeight, Middle, Max, LH);
@@ -349,7 +349,7 @@ agree_on_height(Uri, RHeader, RH, LHeader, LH, Max, Min) when RH == LH ->
              lager:debug("UNEQUAL: ~p =/= ~p", [RHeader, LHeader]),
              %% We disagree. Local on a fork compared to remote. Check half-way
              Middle = (Min + LH) div 2,
-             case Min < Middle of
+             case Min < Middle andalso Middle < Max of
                  true ->
                      {ok, LocalAtHeight} = aec_chain:get_header_by_height(Middle),
                      agree_on_height(Uri, RHeader, RH, LocalAtHeight, Middle, LH, Min);
