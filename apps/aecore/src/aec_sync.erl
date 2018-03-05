@@ -137,11 +137,21 @@ new_header(Uri, Header, AgreedHeight) ->
 %% then we are going to sync with it.
 %% We already agree upon the genesis block and need to find the highest common
 %% block we agree upon. We use a binary search to find out.
-%% From the height we agree upon, we start asking a random subset of our peers
+%% From the height we agree upon, we start asking for blocks to add to the chain.
+%% 
+%% When an additional Ping arrives for which we agree upon genesis, we have
+%% the following possibilities:
+%% 1. It has worst top hash than our node, do not include in sync
+%% 2. It has better top hash than our node, but worst than node we sync with (best)
+%%    We check whether best and new agree for N more blocks, if so, new is added to
+%%    pool with agree block as get-up-to parameter
+%% 3. It has better top hash than node we sync with (best)
+%%    we add new node to best and sync pool
 %% (including the new Ping) for blocks on that height+1 until we reach the 
 %% RemoteTop or decide that that is an invalid fork.
+%% 
 
--record(state, {best, agreed_on_height = 0}).
+-record(state, {best, agreed_on_height = 0, pool = []}).
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
