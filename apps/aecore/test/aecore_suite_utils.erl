@@ -16,6 +16,8 @@
 
 -export([start_node/2,
          stop_node/2,
+         get_node_db_config/1,
+         delete_node_db_if_persisted/1,
          mine_blocks/2,
          mine_blocks/3]).
 
@@ -25,7 +27,8 @@
          subscribe/2,
          unsubscribe/2,
          events_since/3,
-         all_events_since/2]).
+         all_events_since/2,
+         check_for_logs/2]).
 
 -export([proxy/0,
          start_proxy/0,
@@ -59,16 +62,22 @@ create_config(Node, CTConfig, CustomConfig, Options) ->
     EpochCfgPath = epoch_config_dir(Node, CTConfig),
     ok = filelib:ensure_dir(EpochCfgPath),
     MergedCfg = maps:merge(default_config(Node, CTConfig), CustomConfig),
-    write_config(EpochCfgPath, config_apply_options(Node, MergedCfg, Options)).
+    MergedCfg1 = aec_metrics_test_utils:set_statsd_port_config(
+                   Node, MergedCfg, CTConfig),
+    write_config(EpochCfgPath, config_apply_options(Node, MergedCfg1, Options)).
 
 
 make_multi(Config) ->
     make_multi(Config, [dev1, dev2, dev3]).
 
 make_multi(Config, NodesList) ->
+    make_multi(Config, NodesList, "test").
+
+make_multi(Config, NodesList, RefRebarProfile) ->
+    ct:log("RefRebarProfile = ~p", [RefRebarProfile]),
     Top = ?config(top_dir, Config),
     ct:log("Top = ~p", [Top]),
-    Epoch = filename:join(Top, "_build/test/rel/epoch"),
+    Epoch = filename:join(Top, "_build/" ++ RefRebarProfile ++ "/rel/epoch"),
     [setup_node(N, Top, Epoch, Config) || N <- NodesList].
 
 make_shortcut(Config) ->
@@ -97,12 +106,37 @@ stop_node(N, Config) ->
     cmd(["(cd ", node_shortcut(N, Config),
          " && ./bin/epoch stop)"]).
 
+get_node_db_config(Rpc) when is_function(Rpc, 3) ->
+    IsDbPersisted = Rpc(application, get_env, [aecore, persist, false]),
+    MaybeMnesiaDir =
+        case Rpc(application, get_env, [mnesia, dir]) of
+            undefined -> undefined;
+            {ok, MnesiaDir0} ->
+                {ok, Rpc(filename, absname, [MnesiaDir0])}
+        end,
+    ct:log("Is DB persisted? ~p. What is Mnesia dir if any? ~p",
+           [IsDbPersisted, MaybeMnesiaDir]),
+    {ok, {IsDbPersisted, MaybeMnesiaDir}}.
+
+delete_node_db_if_persisted({false, undefined}) ->
+    ok;
+delete_node_db_if_persisted({true, {ok, MnesiaDir}}) ->
+    ct:log("Deleting Mnesia Dir ~p", [MnesiaDir]),
+    {true, _} = {filelib:is_file(MnesiaDir), MnesiaDir},
+    {true, _} = {filelib:is_dir(MnesiaDir), MnesiaDir},
+    RmMnesiaDir = "rm -r '" ++ MnesiaDir ++ "'",
+    ct:log("Running command ~p", [RmMnesiaDir]),
+    os:cmd(RmMnesiaDir),
+    {false, _} = {filelib:is_file(MnesiaDir), MnesiaDir},
+    ok.
+
 mine_blocks(Node, NumBlocksToMine) ->
-    mine_blocks(Node, NumBlocksToMine, 100).
+    mine_blocks(Node, NumBlocksToMine, 10).
 
 mine_blocks(Node, NumBlocksToMine, MiningRate) ->
-    rpc:call(Node, application, set_env, [aecore, expected_mine_rate, MiningRate],
-             5000),
+    ok = rpc:call(
+           Node, application, set_env, [aecore, expected_mine_rate, MiningRate],
+           5000),
     aecore_suite_utils:subscribe(Node, block_created),
     StartRes = rpc:call(Node, aec_conductor, start_mining, [], 5000),
     ct:log("aec_conductor:start_mining() (~p) -> ~p", [Node, StartRes]),
@@ -163,6 +197,30 @@ all_events_since(N, TS) ->
 events_since(N, EvType, TS) ->
     call_proxy(N, {events, EvType, TS}).
 
+check_for_logs(Nodes, Config) ->
+    [] = [{N, Fs} || {N, Fs} <- [{N1, check_for_missing_logs(N1, Config)}
+                                 || N1 <- Nodes],
+                     Fs =/= []],
+    ok.
+
+check_for_missing_logs(N, Config) ->
+    LogDir = log_dir(N, Config),
+    [{missing, F}
+     || F <- expected_logs(),
+        file_missing(filename:join(LogDir, F))].
+
+file_missing(F) ->
+    case file:read_link_info(F) of
+        {ok, _} ->
+            false;
+        _ ->
+            true
+    end.
+
+expected_logs() ->
+    ["epoch.log", "epoch_mining.log",
+     "epoch_pow_cuckoo.log", "epoch_metrics.log"].
+
 %%%=============================================================================
 %%% Internal functions
 %%%=============================================================================
@@ -215,6 +273,7 @@ setup_node(N, Top, Epoch, Config) ->
     cp_dir(filename:join(Epoch, "releases"), DDir ++ "/"),
     cp_dir(filename:join(Epoch, "bin"), DDir ++ "/"),
     symlink(filename:join(Epoch, "lib"), filename:join(DDir, "lib")),
+    symlink(filename:join(Epoch, "patches"), filename:join(DDir, "patches")),
     %%
     CfgD = filename:join([Top, "config/", N]),
     RelD = filename:dirname(
@@ -371,6 +430,9 @@ priv_dir(Config) ->
 
 data_dir(N, Config) ->
     filename:join(node_shortcut(N, Config), "data").
+
+log_dir(N, Config) ->
+    filename:join(node_shortcut(N, Config), "log").
 
 keys_dir(N, Config) ->
     filename:join(data_dir(N, Config), "keys").

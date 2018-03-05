@@ -23,17 +23,18 @@ init([ws_task_worker_args]) ->
 handle_call({handle_msg, {MsgBin, WsPid}}, _From, #state{}=State) ->
     #{<<"target">> := Target0,
       <<"action">> := Action0} = Msg = jsx:decode(MsgBin, [return_maps]),
-    Payload = maps:get(<<"payload">>, Msg, []),
+    Payload = maps:get(<<"payload">>, Msg, #{}),
     Target = binary_to_existing_atom(Target0, utf8),
     Action = binary_to_existing_atom(Action0, utf8),
-    Response0 = ws_int_dispatch:execute(Target, Action, Payload),
+    Response0 = ws_int_dispatch:execute(Target, Action, Payload#{<<"ws_pid">> => WsPid}),
     case Response0 of
         {error, ErrMsg} ->
             lager:info("WS request with target ~p, action ~p and payload ~p failed with reason ~p",
                        [Target, Action, Payload, ErrMsg]),
             pass;
         {ok, O, A, P} ->
-            ws_handler:send_msg(WsPid, O, A, P)
+            Tag = maps:get(<<"tag">>, Msg, untagged),
+            ws_handler:send_msg(WsPid, O, A, Tag, P)
     end,
     {reply, ok, State}.
 

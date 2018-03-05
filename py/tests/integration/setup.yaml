@@ -69,7 +69,7 @@ tests: # test specific settings
         alice: dev1
       blocks_to_mine: 7
       spend_tx:
-        bob_pubkey: Ym9iX2FkZHJlc3M= 
+        bob_pubkey: ak$3kj9ijauBtf2SZQdJm1f1 
         amount: 42
         fee: 2
     test_not_enough_tokens:
@@ -85,6 +85,73 @@ tests: # test specific settings
         bob: dev1
       blocks_to_mine: 3
       spend_tx:
-        alice_pubkey: YWxpY2VfYWRkcmVzcw==
+        alice_pubkey: ak$v6kQV2Z6uXv2PsUJdv955gE
         amount: 1000
         fee: 20
+    test_send_by_name:
+    # Bob registers a name 'bob.aet'
+    # Alice should be able to send tokens to Bob using that name
+      nodes:
+        miner: dev1
+      blocks_to_mine: 3
+      send_tokens:
+        alice: 10
+        bob: 10
+      name_register:
+        name: "bob.aet"
+      spend_tx:
+        amount: 7
+  test_contracts:
+    test_compile_id:
+      nodes:
+        alice: dev1
+    test_encode_id_call:
+      nodes:
+        alice: dev1
+    test_id_call:
+      nodes:
+        alice: dev1
+  test_unsigned_tx:
+    test_contract_create:
+      nodes:
+        node: dev1
+      blocks_to_mine: 3
+      alice:
+        amount: 20
+        fee: 1
+      create_contract:
+        code: "0x36600080376200002160008080805180516004146200003057505b5060011951005b60005260206000f35b80905090565b602001517f6d61696e000000000000000000000000000000000000000000000000000000001462000061576200001a565b602001519050809150506200002a56"
+        vm_version: 1
+        deposit: 1
+        amount: 1
+        gas: 1000
+        gas_price: 1
+        fee: 11
+        call_data: "0x0000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000002a00000000000000000000000000000000000000000000000000000000000000046d61696e00000000000000000000000000000000000000000000000000000000"
+    test_contract_call:
+      nodes:
+        node: dev1
+      blocks_to_mine: 7
+      alice:
+        amount: 50
+        fee: 1
+      contract_call:
+        vm_version: 1
+        fee: 1
+        amount: 10
+        gas: 10
+        gas_price: 1
+        data:
+          function: main
+          argument: "42"
+    test_spend:
+      nodes:
+        node: dev1
+      blocks_to_mine: 7
+      alice:
+        amount: 50
+        fee: 1
+      spend_tx:
+        amount: 13
+        fee: 1
+        recipient: ak$3WkBeo6uZn

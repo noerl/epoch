@@ -2,48 +2,43 @@
 %%%-------------------------------------------------------------------
 %%% @copyright (C) 2017, Aeternity Anstalt
 %%% @doc Main conductor of the mining
-%%% @end
-%%%-------------------------------------------------------------------
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
+%%%
 %% The aec_conductor is the main hub of the mining engine.
-%%
-%% The mining has two states of operation 'running' and 'stopped'
-%% Passing the option {autostart, bool()} to the initialization
-%% controls which mode to start in. In the running mode, block candidates
-%% are generated and mined in separate workers. When mining is successful,
-%% the mined block is published and added to the chain if the state of the
-%% chain allows that. In the stopped mode only blocks arriving from other
-%% miners are added to the chain.
-%%
-%% The mining can be controlled by the API functions start_mining/0
-%% and stop_mining/0. The stop_mining is preemptive (i.e., all workers
-%% involved in mining are killed).
-%%
-%% The aec_conductor operates by delegating all heavy operations to
-%% worker processes in order to be responsive. (See doc at the worker
-%% handling section.)
-%%
-%% The work flow in mining is divided into stages:
-%%  - wait for keys (of the miner)
-%%  - generate block candidate
-%%  - start mining
-%%  - retry mining
-%%
-%% The principle is to optimistically try to start mining, and fall
-%% back to an earlier stage if the preconditions are not met. The next
-%% stage of mining should be triggered in the worker reply for each
-%% stage based on the postconditions of that stage.
-%%
-%% E.g. If the start_mining stage is attempted without having a block
-%% candidate, it should fall back to generating a block candidate.
-%%
-%% E.g. When the mining worker returns it should either start mining a
-%% new block or retry mining based on the return of the mining.
-%%
-%% --------------------------------------------------------------------
+%%%
+%%% The mining has two states of operation 'running' and 'stopped'
+%%% Passing the option {autostart, bool()} to the initialization
+%%% controls which mode to start in. In the running mode, block candidates
+%%% are generated and mined in separate workers. When mining is successful,
+%%% the mined block is published and added to the chain if the state of the
+%%% chain allows that. In the stopped mode only blocks arriving from other
+%%% miners are added to the chain.
+%%%
+%%% The mining can be controlled by the API functions start_mining/0
+%%% and stop_mining/0. The stop_mining is preemptive (i.e., all workers
+%%% involved in mining are killed).
+%%%
+%%% The aec_conductor operates by delegating all heavy operations to
+%%% worker processes in order to be responsive. (See doc at the worker
+%%% handling section.)
+%%%
+%%% The work flow in mining is divided into stages:
+%%%  - wait for keys (of the miner)
+%%%  - generate block candidate
+%%%  - start mining
+%%%  - retry mining
+%%%
+%%% The principle is to optimistically try to start mining, and fall
+%%% back to an earlier stage if the preconditions are not met. The next
+%%% stage of mining should be triggered in the worker reply for each
+%%% stage based on the postconditions of that stage.
+%%%
+%%% E.g. If the start_mining stage is attempted without having a block
+%%% candidate, it should fall back to generating a block candidate.
+%%%
+%%% E.g. When the mining worker returns it should either start mining a
+%%% new block or retry mining based on the return of the mining.
+%%% @end
+%%% --------------------------------------------------------------------
 
 -module(aec_conductor).
 
@@ -56,33 +51,15 @@
         , stop_mining/0
         ]).
 
-%% State trees API
--export([ get_block_state_by_hash/1 %% For testing
-        , get_account/1
-        , get_all_accounts_balances/1
-        ]).
-
 %% Chain API
 -export([ add_synced_block/1
-        , genesis_block/0
-        , genesis_header/0
-        , genesis_hash/0
         , get_block_candidate/0
-        , get_block_by_hash/1
-        , get_block_by_height/1
-        , get_header_by_hash/1
-        , get_header_by_height/1
-        , get_missing_block_hashes/0
-        , get_top_30_blocks_time_summary/0
-        , get_total_difficulty/0
-        , has_block/1
-        , hash_is_connected_to_genesis/1
         , post_block/1
         , post_header/1
-        , top/0
-        , top_block_hash/0
-        , top_header/0
-        , top_header_hash/0
+        ]).
+
+%% for tests
+-export([reinit_chain/0
         ]).
 
 %% gen_server API
@@ -145,46 +122,7 @@ get_mining_workers() ->
     gen_server:call(?SERVER, get_mining_workers).
 
 %%%===================================================================
-%%% State trees API
-
--spec get_block_state_by_hash(BlockHeaderHash :: binary()) ->
-                                     {'ok', trees()} | {'error', any()}.
-get_block_state_by_hash(Hash) when is_binary(Hash) ->
-    gen_server:call(?SERVER, {get_block_state, Hash}).
-
--spec get_account(pubkey()) -> 'no_top_block_hash' | 'no_state_trees' |
-                               'none' | {'value', account()}.
-get_account(Pubkey) ->
-    gen_server:call(?SERVER, {get_account, Pubkey}).
-
--spec get_all_accounts_balances(BlockHeaderHash :: binary()) ->
-                                       {'ok', [{pubkey(), non_neg_integer()}]} |
-                                       {'error', any()}.
-get_all_accounts_balances(Hash) when is_binary(Hash) ->
-    gen_server:call(?SERVER, {get_all_accounts_balances, Hash}).
-
-%%%===================================================================
 %%% Chain API
-
--spec genesis_block() -> {'ok', #block{}} | 'error'.
-genesis_block() ->
-    gen_server:call(?SERVER, genesis_block).
-
--spec genesis_hash() -> binary().
-genesis_hash() ->
-    gen_server:call(?SERVER, genesis_hash).
-
--spec genesis_header() -> {'ok', #header{}} | 'error'.
-genesis_header() ->
-    gen_server:call(?SERVER, genesis_header).
-
--spec has_block(binary()) -> boolean().
-has_block(Hash) when is_binary(Hash) ->
-    gen_server:call(?SERVER, {has_block, Hash}).
-
--spec hash_is_connected_to_genesis(binary()) -> boolean().
-hash_is_connected_to_genesis(Hash) when is_binary(Hash) ->
-    gen_server:call(?SERVER, {hash_is_connected_to_genesis, Hash}).
 
 -spec post_block(#block{}) -> 'ok' | {'error', any()}.
 post_block(#block{} = Block) ->
@@ -198,53 +136,13 @@ add_synced_block(Block) ->
 post_header(#header{} = Header) ->
     gen_server:call(?SERVER, {post_header, Header}).
 
--spec get_block_by_hash(binary()) -> {'ok', block()} | {'error', atom()}.
-get_block_by_hash(Hash) when is_binary(Hash) ->
-    gen_server:call(?SERVER, {get_block, Hash}).
-
--spec get_block_by_height(height()) -> {'ok', block()} | {'error', atom()}.
-get_block_by_height(Height) ->
-    gen_server:call(?SERVER, {get_block_by_height, Height}).
-
--spec get_block_candidate() -> {'ok', block()} | {'error', atom()}.
+-spec get_block_candidate() -> {'ok', aec_blocks:block()} | {'error', atom()}.
 get_block_candidate() ->
     gen_server:call(?SERVER, get_block_candidate).
 
--spec get_header_by_hash(block_header_hash()) -> {'ok', header()} | {'error', atom()}.
-get_header_by_hash(Hash) when is_binary(Hash) ->
-    gen_server:call(?SERVER, {get_header, Hash}).
-
--spec get_header_by_height(height()) -> {'ok', header()} | {'error', atom()}.
-get_header_by_height(Height) when is_integer(Height), Height >= 0 ->
-    gen_server:call(?SERVER, {get_header_by_height, Height}).
-
--spec get_missing_block_hashes() -> [block_header_hash()].
-get_missing_block_hashes() ->
-    gen_server:call(?SERVER, get_missing_block_hashes).
-
--spec get_top_30_blocks_time_summary() -> [{height(), non_neg_integer(), non_neg_integer()}].
-get_top_30_blocks_time_summary() ->
-    gen_server:call(?SERVER, get_top_30_blocks_time_summary).
-
--spec get_total_difficulty() -> {'ok', float()} | {'error', atom()}.
-get_total_difficulty() ->
-    gen_server:call(?SERVER, get_total_difficulty).
-
--spec top() -> block().
-top() ->
-    gen_server:call(?SERVER, get_top_block).
-
--spec top_block_hash() -> binary() | 'undefined'.
-top_block_hash() ->
-    gen_server:call(?SERVER, get_top_block_hash).
-
--spec top_header() -> header().
-top_header() ->
-    gen_server:call(?SERVER, get_top_header).
-
--spec top_header_hash() -> binary() | 'undefined'.
-top_header_hash() ->
-    gen_server:call(?SERVER, get_top_header_hash).
+-spec reinit_chain() -> aec_headers:header().
+reinit_chain() ->
+    gen_server:call(?SERVER, reinit_chain).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -252,21 +150,35 @@ top_header_hash() ->
 
 init(Options) ->
     process_flag(trap_exit, true),
-    State1 = set_option(autostart, Options, #state{chain_state = aec_chain_state:new()}),
+    State1 = set_option(autostart, Options, #state{}),
     State2 = set_option(fetch_new_txs_from_pool, Options, State1),
-    State3 = aec_conductor_chain:init(State2),
-    TopBlockHash = aec_conductor_chain:get_top_block_hash(State3),
-    State4 = State3#state{seen_top_block_hash = TopBlockHash},
-    epoch_mining:info("Miner process initilized ~p", [State4]),
+    ok     = init_chain_state(),
+    TopBlockHash = aec_chain:top_block_hash(),
+    State3 = State2#state{seen_top_block_hash = TopBlockHash},
+    epoch_mining:info("Miner process initilized ~p", [State3]),
     %% NOTE: The init continues at handle_info(init_continue, State).
     self() ! init_continue,
-    {ok, State4}.
+    {ok, State3}.
+
+init_chain_state() ->
+    case aec_chain:genesis_hash() of
+        undefined ->
+            {GB, _GBState} = aec_block_genesis:genesis_block_with_state(),
+            ok = aec_chain_state:insert_block(GB);
+        Hash when is_binary(Hash) ->
+            ok
+    end.
+
+reinit_chain_state() ->
+    %% NOTE: ONLY FOR TEST
+    aec_db:transaction(fun() ->
+                               aec_db:clear_db(),
+                               init_chain_state()
+                       end).
 
 handle_call({add_synced_block, Block},_From, State) ->
     {Reply, State1} = handle_synced_block(Block, State),
     {reply, Reply, State1};
-handle_call(genesis_block,_From, State) ->
-    {reply, aec_conductor_chain:get_genesis_block(State), State};
 handle_call(get_block_candidate,_From, State) ->
     Res =
         case State#state.block_candidate of
@@ -278,42 +190,6 @@ handle_call(get_block_candidate,_From, State) ->
                 {ok, Block}
         end,
     {reply, Res, State};
-handle_call(genesis_hash,_From, State) ->
-    {reply, aec_conductor_chain:get_genesis_hash(State), State};
-handle_call(genesis_header,_From, State) ->
-    {reply, aec_conductor_chain:get_genesis_header(State), State};
-handle_call({get_block, Hash},_From, State) ->
-    {reply, aec_conductor_chain:get_block(Hash, State), State};
-handle_call({get_block_by_height, Height},_From, State) ->
-    {reply, aec_conductor_chain:get_block_by_height(Height, State), State};
-handle_call({get_header, Hash},_From, State) ->
-    {reply, aec_conductor_chain:get_header(Hash, State), State};
-handle_call({get_header_by_height, Height},_From, State) ->
-    {reply, aec_conductor_chain:get_header_by_height(Height, State), State};
-handle_call(get_missing_block_hashes,_From, State) ->
-    {reply, aec_conductor_chain:get_missing_block_hashes(State), State};
-handle_call(get_top_30_blocks_time_summary,_From, State) ->
-    {reply, aec_conductor_chain:get_top_30_blocks_time_summary(State), State};
-handle_call(get_top_block,_From, State) ->
-    {reply, aec_conductor_chain:get_top_block(State), State};
-handle_call({get_block_state, Hash},_From, State) ->
-    {reply, aec_conductor_chain:get_block_state(Hash, State), State};
-handle_call({get_account, Pubkey},_From, State) ->
-    {reply, aec_conductor_chain:get_account(Pubkey, State), State};
-handle_call({get_all_accounts_balances, Hash},_From, State) ->
-    {reply, aec_conductor_chain:get_all_accounts_balances(Hash, State), State};
-handle_call(get_top_block_hash,_From, State) ->
-    {reply, aec_conductor_chain:get_top_block_hash(State), State};
-handle_call(get_top_header,_From, State) ->
-    {reply, aec_conductor_chain:get_top_header(State), State};
-handle_call(get_top_header_hash,_From, State) ->
-    {reply, aec_conductor_chain:get_top_header_hash(State), State};
-handle_call(get_total_difficulty,_From, State) ->
-    {reply, aec_conductor_chain:get_total_difficulty(State), State};
-handle_call({has_block, Hash},_From, State) ->
-    {reply, aec_conductor_chain:has_block(Hash, State), State};
-handle_call({hash_is_connected_to_genesis, Hash},_From, State) ->
-    {reply, aec_conductor_chain:hash_is_connected_to_genesis(Hash, State), State};
 handle_call({post_block, Block},_From, State) ->
     {Reply, State1} = handle_post_block(Block, State),
     {reply, Reply, State1};
@@ -333,6 +209,23 @@ handle_call(get_mining_state,_From, State) ->
     {reply, State#state.mining_state, State};
 handle_call(get_mining_workers, _From, State) ->
     {reply, worker_pids_by_tag(mining, State), State};
+handle_call(reinit_chain, _From, State1) ->
+    %% NOTE: ONLY FOR TEST
+    ok = reinit_chain_state(),
+    TopBlockHash = aec_chain:top_block_hash(),
+    State2 = State1#state{seen_top_block_hash = TopBlockHash},
+    State =
+        case State2#state.mining_state of
+            stopped  ->
+                State2;
+            running ->
+                epoch_mining:info("Mining stopped"),
+                State3 = kill_all_workers(State2),
+                epoch_mining:info("Mining started"),
+                start_mining(State3#state{mining_state = running,
+                                          block_candidate = undefined})
+        end,
+    {reply, ok, State};
 handle_call(Request, _From, State) ->
     epoch_mining:error("Received unknown request: ~p", [Request]),
     Reply = ok,
@@ -523,24 +416,24 @@ worker_reply(wait_for_keys, Res, State) ->
 %%% Preemption of workers if the top of the chain changes.
 
 preempt_if_new_top(#state{seen_top_block_hash = TopHash} = State, Publish) ->
-    case aec_conductor_chain:get_top_block_hash(State) of
+    case aec_chain:top_block_hash() of
         TopHash -> no_change;
         TopBlockHash ->
-            maybe_publish_top(Publish, TopBlockHash, State),
-            update_tx_pool_on_top_change(TopHash, TopBlockHash, State),
+            maybe_publish_top(Publish, TopBlockHash),
+            update_tx_pool_on_top_change(TopHash, TopBlockHash),
             State1 = State#state{seen_top_block_hash = TopBlockHash},
             State2 = kill_all_workers_with_tag(mining, State1),
             State3 = kill_all_workers_with_tag(create_block_candidate, State2),
             {changed, State3#state{block_candidate = undefined}}
     end.
 
-maybe_publish_top(none,_TopHash,_State) -> ok;
-maybe_publish_top(block_created,_TopHash,_State) ->
+maybe_publish_top(none,_TopHash) -> ok;
+maybe_publish_top(block_created,_TopHash) ->
     %% A new block we created is published unconditionally below.
     ok;
-maybe_publish_top(block_received, TopHash, State) ->
+maybe_publish_top(block_received, TopHash) ->
     %% The received block changed the top. Publish the new top.
-    {ok, Block} = aec_conductor_chain:get_block(TopHash, State),
+    {ok, Block} = aec_chain:get_block(TopHash),
     aec_events:publish(top_changed, Block),
     update_chain_metrics(Block).
 
@@ -596,15 +489,13 @@ kill_all_workers_with_tag(Tag, #state{workers = Workers} = State) ->
 %%%===================================================================
 %%% Handling update in transaction pool
 
-update_tx_pool_on_top_change(Hash1, Hash2, State) when is_binary(Hash1),
-                                                       is_binary(Hash2) ->
+update_tx_pool_on_top_change(Hash1, Hash2) when is_binary(Hash1),
+                                                is_binary(Hash2) ->
     epoch_mining:info("Updating transactions ~p ~p", [Hash1, Hash2]),
-    {ok, Ancestor} = aec_conductor_chain:common_ancestor(Hash1, Hash2, State),
-    {ok, TransactionsOnOldChain} =
-        aec_conductor_chain:get_transactions_between(Hash1, Ancestor, State),
-    {ok, TransactionsOnNewChain} =
-        aec_conductor_chain:get_transactions_between(Hash2, Ancestor, State),
-    ok = aec_tx_pool:fork_update(TransactionsOnNewChain, TransactionsOnOldChain),
+    {ok, Ancestor} = aec_chain:find_common_ancestor(Hash1, Hash2),
+    {ok, TxsOnOldChain} = aec_chain:get_transactions_between(Hash1, Ancestor),
+    {ok, TxsOnNewChain} = aec_chain:get_transactions_between(Hash2, Ancestor),
+    ok = aec_tx_pool:fork_update(TxsOnNewChain, TxsOnOldChain),
     ok.
 
 %%%===================================================================
@@ -653,48 +544,66 @@ start_mining(#state{block_candidate = #candidate{top_hash = OldHash},
     %% Candidate generated with stale top hash.
     %% Regenerate the candidate.
     create_block_candidate(State#state{block_candidate = undefined});
-start_mining(#state{} = State) ->
+start_mining(#state{block_candidate = Candidate} = State) ->
     epoch_mining:info("Starting mining"),
-    #candidate{block = Block,
-               nonce = Nonce} = State#state.block_candidate,
-    Info = [{top_block_hash, State#state.seen_top_block_hash}],
+    HeaderBin = Candidate#candidate.bin,
+    Nonce     = Candidate#candidate.nonce,
+    Target    = aec_blocks:target(Candidate#candidate.block),
+    Info      = [{top_block_hash, State#state.seen_top_block_hash}],
     aec_events:publish(start_mining, Info),
-    Fun = fun() -> {aec_mining:mine(Block, Nonce),
-                    State#state.block_candidate}
+    Fun = fun() ->
+                  {aec_mining:mine(HeaderBin, Target, Nonce)
+                  , HeaderBin}
           end,
     dispatch_worker(mining, Fun, State).
 
-handle_mining_reply({{ok, Block},_Candidate}, State) ->
-    aec_metrics:try_update([ae,epoch,aecore,mining,blocks_mined], 1),
-    State1 = State#state{block_candidate = undefined},
-    case handle_mined_block(Block, State1) of
-        {ok, State2} ->
-            State2;
-        {{error, Reason}, State2} ->
-            epoch_mining:error("Block insertion failed: ~p.", [Reason]),
-            start_mining(State2)
+handle_mining_reply(_Reply, #state{block_candidate = undefined} = State) ->
+    %% Something invalidated the block candidate already.
+    start_mining(State);
+handle_mining_reply({{ok, {Nonce, Evd}}, HeaderBin}, #state{} = State) ->
+    Candidate = State#state.block_candidate,
+    %% Check that the solution is for this block
+    case HeaderBin =:= Candidate#candidate.bin of
+        true ->
+            aec_metrics:try_update([ae,epoch,aecore,mining,blocks_mined], 1),
+            State1 = State#state{block_candidate = undefined},
+            Block = aec_blocks:set_pow(Candidate#candidate.block, Nonce, Evd),
+            case handle_mined_block(Block, State1) of
+                {ok, State2} ->
+                    State2;
+                {{error, Reason}, State2} ->
+                    epoch_mining:error("Block insertion failed: ~p.", [Reason]),
+                    start_mining(State2)
+            end;
+        _Other ->
+            %% This mining effort was for an earlier block candidate.
+            epoch_mining:error("Found solution for old block", []),
+            start_mining(State)
     end;
-handle_mining_reply({{error, no_solution}, Candidate}, State) ->
+handle_mining_reply({{error, no_solution}, _}, State) ->
+    Candidate = State#state.block_candidate,
     aec_metrics:try_update([ae,epoch,aecore,mining,retries], 1),
     epoch_mining:debug("Failed to mine block, no solution (nonce ~p); "
                        "retrying.", [Candidate#candidate.nonce]),
-    retry_mining(Candidate, State);
-handle_mining_reply({{error, {runtime, Reason}}, Candidate},State) ->
+    retry_mining(State);
+handle_mining_reply({{error, {runtime, Reason}}, _}, State) ->
     aec_metrics:try_update([ae,epoch,aecore,mining,retries], 1),
+    Candidate = State#state.block_candidate,
     epoch_mining:error("Failed to mine block, runtime error; "
                        "retrying with different nonce (was ~p). "
                        "Error: ~p", [Candidate#candidate.nonce, Reason]),
-    retry_mining(Candidate, State).
+    retry_mining(State).
 
 %%%===================================================================
 %%% Retry mining when we failed to find a solution.
 
-retry_mining(#candidate{top_hash = Hash1},
-             #state{seen_top_block_hash = Hash2} =State) when Hash1 =/= Hash2 ->
+retry_mining(#state{block_candidate = #candidate{top_hash = Hash1},
+                    seen_top_block_hash = Hash2} = State) when Hash1 =/= Hash2 ->
     %% Stale hash for candidate. Rebuild it.
     epoch_mining:info("Stale hash for candidate"),
     start_mining(State#state{block_candidate = undefined});
-retry_mining(Candidate, #state{fetch_new_txs_from_pool = true} = State) ->
+retry_mining(#state{block_candidate = Candidate,
+                    fetch_new_txs_from_pool = true} = State) ->
     Block = Candidate#candidate.block,
     %% We should first see if we can get a new candidate.
     case aec_mining:need_to_regenerate(Block) of
@@ -705,7 +614,7 @@ retry_mining(Candidate, #state{fetch_new_txs_from_pool = true} = State) ->
             epoch_mining:debug("New txs added for mining"),
             start_mining(State#state{block_candidate = undefined})
     end;
-retry_mining(Candidate, State) ->
+retry_mining(#state{block_candidate = Candidate} = State) ->
     retry_mining_with_new_nonce(Candidate, State).
 
 retry_mining_with_new_nonce(#candidate{nonce = N, max_nonce = N}, State) ->
@@ -725,7 +634,9 @@ retry_mining_with_new_nonce(Candidate, State) ->
 %%% Worker: Generate new block candidates
 
 new_candidate(Block, Nonce, MaxNonce, State) ->
+    HeaderBin = aec_headers:serialize_for_hash(aec_blocks:to_header(Block)),
     #candidate{block = Block,
+               bin = HeaderBin,
                nonce = Nonce,
                max_nonce = MaxNonce,
                top_hash = State#state.seen_top_block_hash
@@ -735,17 +646,25 @@ create_block_candidate(#state{keys_ready = false} = State) ->
     %% Keys are needed for creating a candidate
     wait_for_keys(State);
 create_block_candidate(State) ->
-    TopBlock = aec_conductor_chain:get_top_block(State),
-    {ok, TopHash} = aec_blocks:hash_internal_representation(TopBlock),
-    {ok, TopBlockState} = aec_conductor_chain:get_block_state(TopHash, State),
-    AdjChain = aec_conductor_chain:get_adjustment_headers(State),
     epoch_mining:info("Creating block candidate"),
     Fun = fun() ->
+                  {TopBlock, TopBlockState} = aec_chain:top_block_with_state(),
+                  AdjChain = get_adjustment_headers(TopBlock),
                   {aec_mining:create_block_candidate(TopBlock, TopBlockState,
                                                      AdjChain),
                    State#state.seen_top_block_hash}
           end,
     dispatch_worker(create_block_candidate, Fun, State).
+
+get_adjustment_headers(TopBlock) ->
+    {ok, TopHash} = aec_blocks:hash_internal_representation(TopBlock),
+    N = aec_governance:blocks_to_check_difficulty_count(),
+    case aec_blocks:height(TopBlock) < N of
+        true  -> [];
+        false ->
+            {ok, Headers} = aec_chain:get_n_headers_from_hash(TopHash, N),
+            Headers
+    end.
 
 handle_block_candidate_reply({_Result, OldTopHash}, State)
   when OldTopHash =/= State#state.seen_top_block_hash ->
@@ -756,8 +675,11 @@ handle_block_candidate_reply({Result,_OldTopHash}, State) ->
         {ok, BlockCandidate, RandomNonce} ->
             Nonce = aec_pow:next_nonce(RandomNonce),
             epoch_mining:info("Created block candidate and nonce "
-                              "(max ~p, current ~p).",
-                              [RandomNonce, Nonce]),
+                              "(max ~p, current ~p). "
+                              "Its target is ~p (= difficulty ~p).",
+                              [RandomNonce, Nonce,
+                               aec_blocks:target(BlockCandidate),
+                               aec_blocks:difficulty(BlockCandidate)]),
             Candidate = new_candidate(BlockCandidate, Nonce,
                                       RandomNonce, State),
             State1 = State#state{block_candidate = Candidate},
@@ -794,7 +716,7 @@ as_hex(S) ->
 handle_add_block(Block, State, Publish) ->
     Header = aec_blocks:to_header(Block),
     {ok, Hash} = aec_headers:hash_header(Header),
-    case aec_conductor_chain:has_block(Hash, State) of
+    case aec_chain:has_block(Hash) of
         true ->
             epoch_mining:debug("Block already in chain", []),
             {ok, State};
@@ -803,12 +725,12 @@ handle_add_block(Block, State, Publish) ->
             %% TODO: Block validation should also validate header
             case {aec_headers:validate(Header), aec_blocks:validate(Block)} of
                 {ok, ok} ->
-                    case aec_conductor_chain:insert_block(Block, State) of
-                        {ok, State1} ->
+                    case aec_chain_state:insert_block(Block) of
+                        ok ->
                             maybe_publish_block(Publish, Block),
-                            case preempt_if_new_top(State1, Publish) of
-                                no_change -> {ok, State1};
-                                {changed, State2} -> {ok, start_mining(State2)}
+                            case preempt_if_new_top(State, Publish) of
+                                no_change -> {ok, State};
+                                {changed, State1} -> {ok, start_mining(State1)}
                             end;
 			{error, Reason} ->
                             lager:error("Couldn't insert block (~p)", [Reason]),
@@ -829,19 +751,19 @@ handle_add_block(Block, State, Publish) ->
 handle_post_header(Header, State) ->
     epoch_mining:info("post_header: ~p", [Header]),
     {ok, Hash} = aec_headers:hash_header(Header),
-    case aec_conductor_chain:has_header(Hash, State) of
+    case aec_chain:has_header(Hash) of
         true ->
             epoch_mining:debug("Posted header already in chain", []),
             {ok, State};
         false ->
             case aec_headers:validate(Header) of
                 ok ->
-                    case aec_conductor_chain:insert_header(Header, State) of
-                        {ok, State1} ->
+                    case aec_chain_state:insert_header(Header) of
+                        ok ->
                             %% This might have caused a fork
-                            case preempt_if_new_top(State1, none) of
-                                no_change -> {ok, State1};
-                                {changed, State2} -> {ok, start_mining(State2)}
+                            case preempt_if_new_top(State, none) of
+                                no_change -> {ok, State};
+                                {changed, State1} -> {ok, start_mining(State1)}
                             end;
 			{error, Reason} ->
                             lager:debug("Couldn't insert block (~p)", [Reason]),

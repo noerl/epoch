@@ -12,12 +12,12 @@
 
 -include("common.hrl").
 -include("blocks.hrl").
--include("core_txs.hrl").
 
 -define(TEST_MODULE, aec_conductor).
 
 setup_minimal() ->
     ok = application:ensure_started(gproc),
+    ok = aec_test_utils:start_chain_db(),
     meck:new(aec_governance, [passthrough]),
     meck:expect(aec_governance, expected_block_mine_rate,
                 fun() ->
@@ -27,11 +27,9 @@ setup_minimal() ->
     TmpKeysDir = aec_test_utils:aec_keys_setup(),
     aec_test_utils:mock_time(),
     {ok, _} = aec_tx_pool:start_link(),
-    {ok, _} = aec_persistence:start_link(),
     TmpKeysDir.
 
 teardown_minimal(TmpKeysDir) ->
-    ok = aec_persistence:stop_and_clean(),
     ok = aec_tx_pool:stop(),
     ok = application:stop(gproc),
     _  = flush_gproc(),
@@ -39,6 +37,7 @@ teardown_minimal(TmpKeysDir) ->
     meck:unload(aec_governance),
     aec_test_utils:unmock_genesis(),
     aec_test_utils:unmock_time(),
+    ok = aec_test_utils:stop_chain_db(),
     aec_test_utils:aec_keys_cleanup(TmpKeysDir),
     ok.
 
@@ -75,8 +74,7 @@ miner_test_() ->
              teardown_common(TmpKeysDir)
      end,
      [{"Stop and restart miner", fun test_stop_restart/0},
-      {"Test consequtive start/stop ", fun test_stop_restart_seq/0},
-      {"Run miner for a while", fun test_run_miner/0}
+      {"Test consecutive start/stop ", fun test_stop_restart_seq/0}
      ]}.
 
 test_stop_restart() ->
@@ -101,17 +99,6 @@ test_stop_restart_seq() ->
     wait_for_running(),
     ?assertEqual(ok, ?TEST_MODULE:stop_mining()),
     wait_for_stopped(),
-    ok.
-
-test_run_miner() ->
-    ?assertEqual(0, get_top_height()),
-    ?assertEqual(ok, ?TEST_MODULE:stop_mining()),
-    wait_for_stopped(),
-    true = aec_events:subscribe(block_created),
-    ?assertEqual(ok, ?TEST_MODULE:start_mining()),
-    wait_for_block_created(),
-    ?assert(0 < get_top_height()),
-    ?assertEqual(ok, ?TEST_MODULE:stop_mining()),
     ok.
 
 miner_timeout_test_() ->
@@ -195,7 +182,6 @@ chain_test_() ->
      [
       {"Start mining add a block.", fun test_start_mining_add_block/0},
       {"Test preemption of mining", fun test_preemption/0},
-      {"Test chain api"           , fun test_chain_api/0},
       {"Test chain genesis state" , fun test_chain_genesis_state/0},
       {timeout, 20, {"Test block publishing"    , fun test_block_publishing/0}}
      ]}.
@@ -210,7 +196,7 @@ test_start_mining_add_block() ->
     ?assertEqual(ok, ?TEST_MODULE:post_block(B1)),
     ?assertEqual(ok, ?TEST_MODULE:post_block(B2)),
     aec_test_utils:wait_for_it(
-      fun () -> aec_conductor:top_header() end,
+      fun () -> aec_chain:top_header() end,
       BH2).
 
 test_preemption() ->
@@ -249,64 +235,6 @@ test_preemption() ->
 
 -define(error_atom, {error, A} when is_atom(A)).
 
-test_chain_api() ->
-    %% Assert preconditions
-    assert_stopped_and_genesis_at_top(),
-
-    %% Test that we have a genesis block to start out from.
-    {ok, GenesisHeader} = ?TEST_MODULE:genesis_header(),
-    GenesisHash = header_hash(GenesisHeader),
-    ?assertMatch({ok, #block{}}, ?TEST_MODULE:genesis_block()),
-    ?assertMatch({ok, #header{}}, ?TEST_MODULE:genesis_header()),
-    ?assertEqual(GenesisHash, ?TEST_MODULE:genesis_hash()),
-
-    %% Check the format of the top* functions
-    ?assert(is_binary(?TEST_MODULE:top_block_hash())),
-    ?assert(is_binary(?TEST_MODULE:top_header_hash())),
-    ?assertMatch(#block{}, ?TEST_MODULE:top()),
-    ?assertMatch(#header{}, ?TEST_MODULE:top_header()),
-
-    %% Seed the server with a chain
-    [_, B1, B2] = aec_test_utils:gen_blocks_only_chain(3),
-    TopBlock = B2,
-    TopHeader = aec_blocks:to_header(TopBlock),
-    TopHash = block_hash(TopBlock),
-    TopHeight = aec_blocks:height(TopBlock),
-    ?assertEqual(ok, ?TEST_MODULE:post_block(B1)),
-    ?assertEqual(ok, ?TEST_MODULE:add_synced_block(B2)),
-    wait_for_top_block_hash(TopHash),
-
-    FakeHash = <<"I am a fake hash">>,
-
-    %% Check the chain access functions
-    ?assertEqual({ok, TopBlock}, ?TEST_MODULE:get_block_by_hash(TopHash)),
-    ?assertMatch(?error_atom, ?TEST_MODULE:get_block_by_hash(FakeHash)),
-    ?assertEqual({ok, TopBlock}, ?TEST_MODULE:get_block_by_height(TopHeight)),
-    ?assertMatch(?error_atom, ?TEST_MODULE:get_block_by_height(TopHeight + 1)),
-
-    ?assertEqual({ok, TopHeader}, ?TEST_MODULE:get_header_by_hash(TopHash)),
-    ?assertMatch(?error_atom, ?TEST_MODULE:get_header_by_hash(FakeHash)),
-    ?assertEqual({ok, TopHeader}, ?TEST_MODULE:get_header_by_height(TopHeight)),
-    ?assertMatch(?error_atom, ?TEST_MODULE:get_header_by_height(TopHeight + 1)),
-
-    ?assertEqual(true, ?TEST_MODULE:hash_is_connected_to_genesis(TopHash)),
-    ?assertEqual(false, ?TEST_MODULE:hash_is_connected_to_genesis(FakeHash)),
-
-    ?assertEqual(true, ?TEST_MODULE:has_block(TopHash)),
-    ?assertEqual(false, ?TEST_MODULE:has_block(FakeHash)),
-
-    ?assertMatch({ok, F} when is_float(F), ?TEST_MODULE:get_total_difficulty()),
-
-    %% Check the chain state functions
-    ?assertMatch({ok, [{_,_} | _]},
-                 ?TEST_MODULE:get_all_accounts_balances(TopHash)),
-    ?assertMatch(?error_atom, ?TEST_MODULE:get_all_accounts_balances(FakeHash)),
-    {ok, [{PK, Balance} | _]} = ?TEST_MODULE:get_all_accounts_balances(TopHash),
-    ?assertMatch({value, #account{pubkey = PK, balance = Balance}},
-                 ?TEST_MODULE:get_account(PK)),
-    ?assertEqual(none, ?TEST_MODULE:get_account(<<"I am a fake public key">>)),
-    ok.
-
 test_chain_genesis_state() ->
     %% Assert preconditions
     assert_stopped_and_genesis_at_top(),
@@ -316,24 +244,26 @@ test_chain_genesis_state() ->
     GHH = header_hash(GH),
 
     %% Check genesis block in chain, including state
-    ?assertEqual(GHH, ?TEST_MODULE:genesis_hash()),
-    ?assertEqual({ok, GH}, ?TEST_MODULE:genesis_header()),
-    ?assertEqual({ok, GB}, ?TEST_MODULE:genesis_block()),
-    ?assertMatch({ok, #trees{}}, ?TEST_MODULE:get_block_state_by_hash(GHH)),
-    ?assertEqual({ok, GBS}, ?TEST_MODULE:get_block_state_by_hash(GHH)),
+    ?assertEqual(GHH, aec_chain:genesis_hash()),
+    ?assertEqual(GH, aec_chain:genesis_header()),
+    ?assertEqual(GB, aec_chain:genesis_block()),
+
+    {ok, GBS1} = aec_chain:get_block_state(GHH),
+    ?assertEqual(aec_trees:hash(GBS1), aec_trees:hash(GBS)),
 
     %% Check that genesis is top
-    ?assertEqual(GHH, ?TEST_MODULE:top_header_hash()),
-    ?assertEqual(GHH, ?TEST_MODULE:top_block_hash()),
+    ?assertEqual(GHH, aec_chain:top_header_hash()),
+    ?assertEqual(GHH, aec_chain:top_block_hash()),
 
     %% Check chain state functions
     GenesisAccountsBalances = aec_test_utils:preset_accounts(),
     ?assertEqual({ok, GenesisAccountsBalances},
-                 ?TEST_MODULE:get_all_accounts_balances(GHH)),
+                 aec_chain:all_accounts_balances_at_hash(GHH)),
     [{PK, Balance} | _] = GenesisAccountsBalances,
-    ?assertMatch({value, #account{pubkey = PK, balance = Balance}},
-                 ?TEST_MODULE:get_account(PK)),
-    ?assertEqual(none, ?TEST_MODULE:get_account(<<"I am a fake public key">>)),
+    GenAccount = aec_accounts:new(PK, Balance, 0),
+    ?assertMatch({value, GenAccount},
+                 aec_chain:get_account(PK)),
+    ?assertEqual(none, aec_chain:get_account(<<"I am a fake public key">>)),
     ok.
 
 test_block_publishing() ->
@@ -381,6 +311,75 @@ test_block_publishing() ->
     ok.
 
 %%%===================================================================
+%%% Pending block tests
+%%%===================================================================
+
+block_candidate_test_() ->
+    {foreach,
+     fun() ->
+          TmpKeysDir = setup_common(),
+          {ok, _} = ?TEST_MODULE:start_link([{autostart, false}]),
+          meck:new(aec_mining, [passthrough]),
+          meck:expect(aec_mining, create_block_candidate,
+              fun(TopBlock, TopBlockState, AdjChain) ->
+                  timer:sleep(100),
+                  meck:passthrough([TopBlock, TopBlockState, AdjChain])
+              end),
+          meck:expect(aec_mining, mine,
+              fun(_, _, _) ->
+                  timer:sleep(3000),
+                  {error, no_solution}
+              end),
+          TmpKeysDir
+     end,
+     fun(TmpKeysDir) ->
+          meck:unload(aec_mining),
+          teardown_common(TmpKeysDir),
+          ok
+     end,
+     [
+      {"Get block candidate", fun test_get_block_candidate/0}
+     ]}.
+
+test_get_block_candidate() ->
+    assert_stopped_and_genesis_at_top(),
+    ?assertEqual({error, not_mining}, ?TEST_MODULE:get_block_candidate()),
+    {ok, MyAccount} = aec_keys:pubkey(),
+    lists:foreach(
+        fun(_) ->
+            {ok, Tx} = aec_spend_tx:new(#{sender => MyAccount,
+                                          recipient => MyAccount,
+                                          amount => 0,
+                                          nonce => 0, fee => 0}),
+            {ok, STx} = aec_keys:sign(Tx),
+            ok = aec_tx_pool:push(STx, tx_received)
+        end,
+        lists:seq(1, 3)),
+    ?TEST_MODULE:start_mining(),
+    ?assertEqual({error, miner_starting}, ?TEST_MODULE:get_block_candidate()),
+    true = aec_test_utils:wait_for_it(
+              fun() -> {error, miner_starting} =/= ?TEST_MODULE:get_block_candidate() end,
+              true),
+    TopBlock = aec_chain:top_block(),
+    {ok, BlockCandidate} = ?TEST_MODULE:get_block_candidate(),
+    {ok, TopBlockHash} = aec_blocks:hash_internal_representation(TopBlock),
+    ?assertEqual(TopBlockHash, aec_blocks:prev_hash(BlockCandidate)),
+    {ok, AllTxsInPool} = aec_tx_pool:peek(infinity),
+    ?assertEqual(true,
+        lists:all(
+            fun(SignedTx) ->
+                Tx = aetx_sign:tx(SignedTx),
+                case aetx:tx_type(Tx) of
+                    <<"aec_coinbase_tx">> -> true;
+                    _ ->
+                        lists:member(Tx, AllTxsInPool)
+                end
+            end,
+            aec_blocks:txs(BlockCandidate))),
+    ?TEST_MODULE:stop_mining(),
+    ?assertEqual({error, not_mining}, ?TEST_MODULE:get_block_candidate()),
+    ok.
+%%%===================================================================
 %%% Helpers
 %%%===================================================================
 
@@ -389,7 +388,7 @@ assert_stopped() ->
 
 assert_stopped_and_genesis_at_top() ->
     assert_stopped(),
-    ?assertEqual(?TEST_MODULE:top_block_hash(),
+    ?assertEqual(aec_chain:top_block_hash(),
                  header_hash(aec_blocks:to_header(aec_test_utils:genesis_block()))).
 
 block_hash(Block) ->
@@ -399,10 +398,6 @@ block_hash(Block) ->
 header_hash(Header) ->
     {ok, Hash} = aec_headers:hash_header(Header),
     Hash.
-
-get_top_height() ->
-    TopBlock = aec_conductor:top(),
-    aec_blocks:height(TopBlock).
 
 wait_for_stopped() ->
     aec_test_utils:wait_for_it(fun ?TEST_MODULE:get_mining_state/0, stopped).
@@ -433,7 +428,7 @@ expect_top_event_hashes(Expected, AllowMissing) ->
 
 wait_for_top_block_hash(Hash) ->
     aec_test_utils:wait_for_it(
-      fun () -> aec_conductor:top_block_hash() end,
+      fun () -> aec_chain:top_block_hash() end,
       Hash).
 
 wait_for_block_created() ->

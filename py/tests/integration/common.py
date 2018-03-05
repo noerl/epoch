@@ -8,32 +8,35 @@ import unittest
 import datetime
 import time
 import base64
+import logging
 
-from py.tests import swagger_client
-from py.tests.swagger_client.rest import ApiException
-from py.tests.swagger_client.apis.external_api import ExternalApi
-from py.tests.swagger_client.apis.internal_api import InternalApi
-from py.tests.swagger_client.api_client import ApiClient
-from py.tests.swagger_client.models.block import Block
-from py.tests.swagger_client.models.signed_tx import SignedTx
-from py.tests.swagger_client.models.coinbase_tx import CoinbaseTx
-from py.tests.swagger_client.models.balance import Balance 
+from swagger_client.rest import ApiException
+from swagger_client.api.external_api import ExternalApi
+from swagger_client.api.internal_api import InternalApi
+from swagger_client.api_client import ApiClient
+from swagger_client.models.block import Block
+from swagger_client.models.balance import Balance 
+from swagger_client.models.pub_key import PubKey
+from swagger_client.configuration import Configuration
 
 from nose.tools import assert_equals
 from testconfig import config
 from waiting import wait
 
-import logging
-logging.getLogger("urllib3").setLevel(logging.ERROR)
+import msgpack
+import base58
+
 EXT_API = {}
 for node, node_config in config['nodes'].iteritems():
-    EXT_API[node] = ExternalApi(ApiClient(host=node_config['host'] + ':'
-                + str(node_config['ports']['external_api']) + '/v2'))
+    empty_config = Configuration()
+    empty_config.host = node_config['host'] + ':' + str(node_config['ports']['external_api']) + '/v2'
+    EXT_API[node] = ExternalApi(ApiClient(empty_config))
 
 INT_API = {}
 for node, node_config in config['nodes'].iteritems():
-    INT_API[node] = InternalApi(ApiClient(host=node_config['host'] + ':'
-                + str(node_config['ports']['internal_api']) + '/v2'))
+    empty_config = Configuration()
+    empty_config.host = node_config['host'] + ':' + str(node_config['ports']['internal_api']) + '/v2'
+    INT_API[node] = InternalApi(ApiClient(empty_config))
 
 def external_api(name):
     return EXT_API[name]
@@ -98,15 +101,44 @@ def genesis_hash(api):
     return block.prev_hash
 
 def wait_until_height(api, height):
-    wait(lambda: api.get_top().height >= height, timeout_seconds=30, sleep_seconds=0.25)
+    wait(lambda: api.get_top().height >= height, timeout_seconds=120, sleep_seconds=0.25)
 
-def get_account_balance(api, pub_key=None):
+def get_account_balance(int_api, pub_key=None):
     balance = Balance(balance=0)
     try:
         if pub_key == None:
-            balance = api.get_account_balance()
+            pub_key_obj = int_api.get_pub_key()
+            balance = int_api.get_account_balance(pub_key_obj.pub_key)
         else:
-            balance = api.get_account_balance(pub_key=pub_key)
+            balance = int_api.get_account_balance(pub_key)
     except ApiException as e:
         assert_equals(e.status, 404) # Alice has no account yet
     return balance
+
+def base58_decode(encoded):
+    if encoded[2] != '$':
+        raise ValueError('Invalid hash')
+    return base58.b58decode_check(encoded[3:])
+
+def encode_signed_tx(encoded_tx, signatures):
+    str = base58.b58encode_check(msgpack.packb(["sig_tx", 1, encoded_tx, signatures], use_bin_type=True))
+    return "tx$" + str
+
+def encode_pubkey(pubkey):
+    str = base58.b58encode_check(pubkey)
+    return "ak$" + str
+
+def encode_name(name):
+    str = base58.b58encode_check(name)
+    return "nm$" + str
+
+def unpack_tx(tx):
+    return msgpack.unpackb(tx)
+
+def parse_tx(unpacked_tx):
+    tx = {}
+    for elem in unpacked_tx:
+        tx.update(elem)
+    return tx
+
+logging.getLogger("urllib3").setLevel(logging.ERROR)

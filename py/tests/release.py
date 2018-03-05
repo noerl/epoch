@@ -1,7 +1,6 @@
 import os
 import getopt
 import sys
-import tempfile
 import time
 import unittest
 import argparse
@@ -13,35 +12,56 @@ from waiting import wait
 
 import swagger_client
 from swagger_client.rest import ApiException
-from swagger_client.apis.external_api import ExternalApi
+from swagger_client.api.external_api import ExternalApi
 from swagger_client.api_client import ApiClient
+from swagger_client.configuration import Configuration
 
 # these are executed for every node
 NODE_SETUP_COMMANDS = [
-        "sed -ibkp 's/-sname epoch/-sname {{ name }}/g' ./releases/{{ version }}/vm.args",
-        "sed -ibkp 's/{aec_pow_cuckoo, {\"mean28s-generic\", \"-t 5\", 28}}/{aec_pow_cuckoo, {\"mean16s-generic\", \"-t 5\", 16}}/g' ./releases/{{ version }}/sys.config"
+        "sed -ibkp 's/-sname epoch/-sname {{ name }}/g' ./releases/{{ version }}/vm.args"
         ]
 # node's setup
 SETUP = {
         "node1": {
             "host": "localhost:9813/v2",
             "name": "epoch1",
+            "user_config": '''
+---
+peers:
+    - "http://localhost:9823/"
+    - "http://localhost:9833/"
+
+http:
+    external:
+        port: 9813
+    internal:
+        port: 9913
+
+websocket:
+    internal:
+        port: 9914
+        acceptors: 100
+
+mining:
+    cuckoo:
+        miner:
+            executable: mean16s-generic
+            extra_args: "-t 5"
+            node_bits: 16
+
+chain:
+    persist: true
+    db_path: ./my_db
+''',
             "config": '''[
 {aecore,
  [
-  {peers, ["http://localhost:9823/",
-           "http://localhost:9833/"]},
-  {aec_pow_cuckoo, {"mean16s-generic", "-t 5", 16}},
   {expected_mine_rate, 100}
  ]},
 {aehttp,
  [
-  {swagger_port_external, 9813},
   {internal, [
-      {swagger_port, 9913},
-      {websocket, [ {port, 9914},
-                    {handlers, 100},
-                    {tasks, 200}
+      {websocket, [ {tasks, 200}
                 ]}
     ]}
  ]}
@@ -51,21 +71,39 @@ SETUP = {
         "node2": {
             "host": "localhost:9823/v2",
             "name": "epoch2",
+            "user_config": '''
+---
+http:
+    external:
+        port: 9823
+    internal:
+        port: 9923
+
+websocket:
+    internal:
+        port: 9924
+        acceptors: 100
+
+mining:
+    cuckoo:
+        miner:
+            executable: mean16s-generic
+            extra_args: "-t 5"
+            node_bits: 16
+
+chain:
+    persist: true
+    db_path: ./my_db
+''',
             "config": '''[
 {aecore,
  [
-  {peers, []},
-  {aec_pow_cuckoo, {"mean16s-generic", "-t 5", 16}},
   {expected_mine_rate, 100}
  ]},
 {aehttp,
  [
-  {swagger_port_external, 9823},
   {internal, [
-      {swagger_port, 9923},
-      {websocket, [ {port, 9924},
-                    {handlers, 100},
-                    {tasks, 200}
+      {websocket, [ {tasks, 200}
                 ]}
     ]}
  ]}
@@ -75,21 +113,39 @@ SETUP = {
         "node3": {
             "host": "localhost:9833/v2",
             "name": "epoch3",
+            "user_config": '''
+---
+http:
+    external:
+        port: 9833
+    internal:
+        port: 9933
+
+websocket:
+    internal:
+        port: 9934
+        acceptors: 100
+
+mining:
+    cuckoo:
+        miner:
+            executable: mean16s-generic
+            extra_args: "-t 5"
+            node_bits: 16
+
+chain:
+    persist: true
+    db_path: ./my_db
+''',
             "config": '''[
 {aecore,
  [
-  {peers, []},
-  {aec_pow_cuckoo, {"mean16s-generic", "-t 5", 16}},
   {expected_mine_rate, 100}
  ]},
 {aehttp,
  [
-  {swagger_port_external, 9833},
   {internal, [
-      {swagger_port, 9933},
-      {websocket, [ {port, 9934},
-                    {handlers, 100},
-                    {tasks, 200}
+      {websocket, [ {tasks, 200}
                 ]}
     ]}
  ]}
@@ -127,8 +183,36 @@ def start_node(temp_dir):
     os.chdir(temp_dir)
     os.system('ERL_FLAGS="-config `pwd`/p.config" bin/epoch start')
 
+def eval_on_node(temp_dir, quoted_code):
+    binary = executable(temp_dir)
+    assert os.path.isfile(binary)
+    assert os.access(binary, os.X_OK)
+    cmd = binary + " eval " + quoted_code
+    print("Evaluating " + cmd)
+    os.chdir(temp_dir)
+    return os.system(cmd)
+
+def existing_empty_dir(s):
+    if s == "":
+        msg = "{} is not a non-empty directory path".format(s)
+        raise argparse.ArgumentTypeError(msg)
+    v = os.path.abspath(s)
+    if not os.path.isdir(v):
+        msg = ("Path {} is not an existing directory "
+               "(path absolutized from {})").format(v, s)
+        raise argparse.ArgumentTypeError(msg)
+    ls = os.listdir(v)
+    if ls:
+        msg = ("Path {} is not an empty directory "
+               "because it contains {} entries i.e. {}"
+               "(path absolutized from {})").format(v, len(ls), str(ls), s)
+        raise argparse.ArgumentTypeError(msg)
+    return v
+
 def read_argv(argv):
     parser = argparse.ArgumentParser(description='Integration test a potential release')
+    parser.add_argument('--workdir', type=existing_empty_dir, required=True,
+                        help='Working directory for testing. It must exist and be empty.')
     parser.add_argument('--blocks', type=int, default=10,
                         help='Number of blocks to mine')
     parser.add_argument('--tarball', required=True, 
@@ -140,7 +224,7 @@ def read_argv(argv):
     args = parser.parse_args()
     tar_file_name = args.tarball
     blocks = args.blocks
-    return (tar_file_name, blocks, args.version)
+    return (args.workdir, tar_file_name, blocks, args.version)
 
 def tail_logs(temp_dir, log_name):
     n = 200 # last 200 lines
@@ -157,14 +241,16 @@ def setup_node(node, path, version):
     for command in NODE_SETUP_COMMANDS: 
         os.system(pystache.render(command, {"version": version, \
                                             "name": SETUP[node]["name"]}))
-    file_obj = open(os.path.join(path, "p.config"), "w")
-    file_obj.write(SETUP[node]["config"])
-    file_obj.close()
+    ucfg = open(os.path.join(path, "epoch.yaml"), "w")
+    ucfg.write(SETUP[node]["user_config"])
+    ucfg.close()
+    cfg = open(os.path.join(path, "p.config"), "w")
+    cfg.write(SETUP[node]["config"])
+    cfg.close()
 
 def main(argv):
     logging.getLogger("urllib3").setLevel(logging.ERROR)
-    tar_file_name, blocks_to_mine, version = read_argv(argv)
-    root_dir = tempfile.mkdtemp()
+    root_dir, tar_file_name, blocks_to_mine, version = read_argv(argv)
     temp_dir_dev1 = os.path.join(root_dir, "node1") 
     os.makedirs(temp_dir_dev1)
 
@@ -183,7 +269,11 @@ def main(argv):
     [start_node(d) for d in node_dirs]
 
 
-    node_objs = [ExternalApi(ApiClient(host=SETUP[n]["host"])) for n in node_names]
+    empty_config = Configuration()
+    node_objs = []
+    for n in node_names:
+        empty_config.host = SETUP[n]["host"]
+        node_objs.append(ExternalApi(ApiClient(configuration=empty_config)))
 
     wait_all_nodes_are_online(node_objs)
 
@@ -207,14 +297,29 @@ def main(argv):
         test_failed = True
         print("node died")
     [stop_node(d) for d in node_dirs]
+
+    if not test_failed:
+        print("Checking that nodes are able to start with persisted non-empty DB")
+        [start_node(d) for d in node_dirs]
+        wait_all_nodes_are_online(node_objs)
+        [stop_node(d) for d in node_dirs]
+
+    if not test_failed:
+        print("Checking that emergency patching of OTP modules works: `mnesia:index_read`")
+        [start_node(d) for d in node_dirs]
+        wait_all_nodes_are_online(node_objs)
+        if 0 != eval_on_node(temp_dir_dev1, "'aec_db:transactions_by_account(<<\"FakeAccountPublicKey\">>).'"):
+            test_failed = True
+            print("Check on `mnesia:index_read` failed")
+            [stop_node(d) for d in node_dirs]
+
     if test_failed:
         for name, node_dir in zip(node_names, node_dirs):
             print(name + " logs:")
             print(tail_logs(node_dir, "epoch.log"))
             print("\n")
-    shutil.rmtree(root_dir)
     if test_failed:
-        sys.exit("FAILED")	
+        sys.exit("FAILED")      
 
 if __name__ == "__main__":
     main(sys.argv)

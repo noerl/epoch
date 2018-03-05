@@ -3,10 +3,7 @@
 %% API
 -export([request/3]).
 
-%% include generated code
--include("../include/endpoints.hrl").
-
-
+-spec request(iodata(), atom(), list({string(), iodata()}) | map()) -> {ok, integer(), any()} | {error, any()}. 
 request(BaseUri, OperationId, Params) ->
     Timeout = aeu_env:user_config_or_env(
                 [<<"http">>, <<"external">>,<<"request_timeout">>],
@@ -15,7 +12,7 @@ request(BaseUri, OperationId, Params) ->
                  [<<"http">>, <<"external">>, <<"connect_timeout">>],
                  aehttp, http_connect_timeout, min(Timeout, 1000)),
     HTTPOptions = [{timeout, Timeout}, {connect_timeout, CTimeout}],
-    #{path := Endpoint, method := Method} = operation(OperationId),
+    #{path := Endpoint, method := Method} = endpoints:operation(OperationId),
     request(BaseUri, Method, Endpoint, Params, [], HTTPOptions, []).
 
 request(BaseUri, get, Endpoint, Params, Header, HTTPOptions, Options) ->
@@ -43,11 +40,11 @@ request(BaseUri, post, Endpoint, Params, Header, HTTPOptions, Options) ->
 process_http_return(R) ->
     case R of
         %% if Body == [] an error is thrown!
-        {ok, {{_,_ReturnCode, _State}, _Head, Body}} ->
+        {ok, {{_, StatusCode, _State}, _Head, Body}} ->
             try
                 Result = jsx:decode(iolist_to_binary(Body), [return_maps]),
                 lager:debug("Decoded response: ~p", [Result]),
-                {ok, Result}
+                {ok, StatusCode, Result}
             catch
                 error:E ->
                     lager:error("http response ~p", [R]),
@@ -58,10 +55,10 @@ process_http_return(R) ->
             Error
     end.
 
--spec encode_get_params(map() | list({string(), string()})) -> iolist().
+-spec encode_get_params(map() | list({string(), iodata()})) -> iodata().
 encode_get_params(#{} = Ps) ->
     encode_get_params(maps:to_list(Ps));
 encode_get_params(Params) when is_list(Params) ->
-    ["?", string:join( [ [http_uri:encode(K), "=" , http_uri:encode(V)] 
-                         || {K,V} <- Params ], "&" ) ].
+    ["?", lists:join( "&", [ [http_uri:encode(K), "=" , http_uri:encode(V)] 
+                             || {K,V} <- Params ] ) ].
 

@@ -11,15 +11,28 @@
 -module(aer_compiler).
 
 -export([ file/1
-        , file/2]).
+        , file/2
+        , from_string/2]).
 
 -export([test/0]).
+
+-type option() :: pp_ring_code | pp_ast | pp_icode | pp_assembler | pp_bytecode.
+-type options() :: [option()].
+
+-export_type([ option/0
+             , options/0
+             ]).
 
 file(Filename) ->
     file(Filename, []).
 
 file(Filename, Options) ->
-    Ast = parse(Filename, Options),
+    C = read_contract(Filename),
+    from_string(C, Options).
+
+from_string(ContractString, Options) ->
+    ok = pp_ring_code(ContractString, Options),
+    Ast = parse(ContractString, Options),
     ok = pp_ast(Ast, Options),
     ICode = to_icode(Ast, Options),
     ok = pp_icode(ICode, Options),
@@ -30,11 +43,7 @@ file(Filename, Options) ->
     ok = pp_bytecode(ByteCode, Options),
     ByteCode.
 
-
-
-parse(_Filename, Options) ->
-    C = read_contract(identity),
-    ok = pp_ring_code(C, Options),
+parse(C,_Options) ->
     parse_string(C).
     
 to_icode(Ast, Options) ->

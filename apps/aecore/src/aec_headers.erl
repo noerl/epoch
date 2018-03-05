@@ -9,11 +9,7 @@
          difficulty/1,
          time_in_secs/1,
          time_in_msecs/1,
-         serialize_to_network/1,
-         deserialize_from_network/1,
          serialize_for_hash/1,
-         serialize_for_store/1,
-         deserialize_from_store/1,
          serialize_to_map/1,
          deserialize_from_map/1,
          hash_header/1,
@@ -24,6 +20,11 @@
 
 -include("common.hrl").
 -include("blocks.hrl").
+
+%% header() can't be opaque since it is currently used
+%% in a an involved way by aec_blocks - TODO: untangle
+-type header() :: #header{}.
+-export_type([header/0]).
 
 -define(POW_EV_SIZE, 42).
 
@@ -55,11 +56,6 @@ time_in_secs(Header) ->
 time_in_msecs(Header) ->
     Header#header.time.
 
--spec serialize_to_network(header()) -> {ok, binary()}.
-serialize_to_network(H = #header{}) ->
-    {ok, Map} = serialize_to_map(H),
-    {ok, jsx:encode(Map)}.
-
 -spec serialize_to_map(header()) -> {ok, map()}.
 serialize_to_map(H = #header{}) ->
     Serialized =
@@ -75,64 +71,6 @@ serialize_to_map(H = #header{}) ->
       },
     {ok, Serialized}.
 
--define(STORAGE_VERSION, 1).
-serialize_for_store(H = #header{}) ->
-    Bin = term_to_binary({?STORAGE_VERSION,
-                          height(H),
-                          prev_hash(H),
-                          H#header.root_hash,
-                          H#header.txs_hash,
-                          H#header.target,
-                          H#header.nonce,
-                          H#header.time,
-                          H#header.version,
-                          H#header.pow_evidence
-                         }, [{compressed,9}]),
-    <<?STORAGE_TYPE_HEADER:8, Bin/binary>>.
-
-
-deserialize_from_store(<<?STORAGE_TYPE_HEADER, Bin/binary>>) ->
-    case binary_to_term(Bin) of
-        {?STORAGE_VERSION,
-         Height,
-         PrevHash,
-         RootHash,
-         TxsHash,
-         Target,
-         Nonce,
-         Time,
-         Version,
-         PowEvidence
-        } when Nonce >= 0,
-               Nonce =< ?MAX_NONCE ->
-            {ok,
-             #header{
-                height = Height,
-                prev_hash = PrevHash,
-                root_hash = RootHash,
-                txs_hash = TxsHash,
-                target = Target,
-                nonce = Nonce,
-                time = Time,
-                version = Version,
-                pow_evidence = PowEvidence}
-             };
-        T when tuple_size(T) > 0 ->
-            case element(1, T) of
-                I when is_integer(I), I > ?STORAGE_VERSION ->
-                    exit({future_storage_version, I, Bin});
-                %% Add handler of old version here when upgrading version.
-                I when is_integer(I), I < ?STORAGE_VERSION ->
-                    exit({old_forgotten_storage_version, I, Bin})
-            end
-    end;
-deserialize_from_store(_) -> false.
-
-
-
--spec deserialize_from_network(binary()) -> {ok, header()}.
-deserialize_from_network(B) when is_binary(B) ->
-    deserialize_from_map(jsx:decode(B, [return_maps])).
 
 -spec deserialize_from_map(map()) -> {ok, header()}.
 deserialize_from_map(H = #{}) ->
@@ -182,7 +120,7 @@ serialize_for_hash(H) ->
 -spec hash_header(header()) -> {ok, block_header_hash()}.
 hash_header(H) ->
     BinaryH = serialize_for_hash(H),
-    {ok, aec_sha256:hash(BinaryH)}.
+    {ok, aec_hash:hash(header, BinaryH)}.
 
 serialize_pow_evidence_for_hash(Ev) ->
    << <<E:32>> || E <- serialize_pow_evidence(Ev) >>.
@@ -229,12 +167,11 @@ validate_pow(#header{nonce = Nonce,
                      pow_evidence = Evd,
                      target = Target} = Header) when Nonce >= 0,
                                                      Nonce =< ?MAX_NONCE ->
-    Mod = aec_pow:pow_module(),
     %% Zero nonce and pow_evidence before hashing, as this is how the mined block
     %% got hashed.
     Header1 = Header#header{nonce = 0, pow_evidence = no_value},
     HeaderBinary = serialize_for_hash(Header1),
-    case Mod:verify(HeaderBinary, Nonce, Evd, Target) of
+    case aec_pow_cuckoo:verify(HeaderBinary, Nonce, Evd, Target) of
         true ->
             ok;
         false ->

@@ -13,7 +13,6 @@
 -export([ deserialize/1
         , expires/1
         , id/1
-        , interactions_hash/1
         , new/2
         , owner/1
         , query_fee/1
@@ -21,7 +20,6 @@
         , response_format/1
         , serialize/1
         , set_expires/2
-        , set_interactions_hash/2
         , set_owner/2
         , set_query_fee/2
         , set_query_format/2
@@ -40,16 +38,14 @@
 
 -type type_spec()    :: binary(). %% Utf8 encoded string
 
--type response() :: undefined | binary(). %% Don't use native types for responses
+-type query()    :: binary().             %% Don't use native types for queries
+-type response() :: binary(). %% Don't use native types for responses
 
--type interactions_hash() :: aeu_mtrees:root_hash().
-
--record(oracle, { owner             :: pubkey()
-                , query_format      :: type_spec()
-                , response_format   :: type_spec()
-                , query_fee         :: amount()
-                , expires           :: height()
-                , interactions_hash :: interactions_hash()
+-record(oracle, { owner           :: pubkey()
+                , query_format    :: type_spec()
+                , response_format :: type_spec()
+                , query_fee       :: amount()
+                , expires         :: height()
                 }).
 
 
@@ -61,6 +57,7 @@
 -export_type([ fixed_ttl/0
              , id/0
              , oracle/0
+             , query/0
              , response/0
              , relative_ttl/0
              , serialized/0
@@ -81,7 +78,7 @@
 id(O) ->
   owner(O).
 
--spec new(aeo_register_tx:register_tx(), height()) -> oracle().
+-spec new(aeo_register_tx:tx(), height()) -> oracle().
 new(RTx, BlockHeight) ->
     Expires = aeo_utils:ttl_expiry(BlockHeight, aeo_register_tx:ttl(RTx)),
     O = #oracle{ owner = aeo_register_tx:account(RTx)
@@ -89,40 +86,36 @@ new(RTx, BlockHeight) ->
                , response_format = aeo_register_tx:response_spec(RTx)
                , query_fee = aeo_register_tx:query_fee(RTx)
                , expires = Expires
-               , interactions_hash = <<0:(?HASH_SIZE*8)>>
                },
     assert_fields(O).
 
 -spec serialize(oracle()) -> binary().
 serialize(#oracle{} = O) ->
-    msgpack:pack([ #{<<"type">>              => ?ORACLE_TYPE}
-                 , #{<<"vsn">>               => ?ORACLE_VSN}
-                 , #{<<"owner">>             => owner(O)}
-                 , #{<<"query_format">>      => query_format(O)}
-                 , #{<<"response_format">>   => response_format(O)}
-                 , #{<<"query_fee">>         => query_fee(O)}
-                 , #{<<"expires">>           => expires(O)}
-                 , #{<<"interactions_hash">> => interactions_hash(O)}
+    msgpack:pack([ #{<<"type">>            => ?ORACLE_TYPE}
+                 , #{<<"vsn">>             => ?ORACLE_VSN}
+                 , #{<<"owner">>           => owner(O)}
+                 , #{<<"query_format">>    => query_format(O)}
+                 , #{<<"response_format">> => response_format(O)}
+                 , #{<<"query_fee">>       => query_fee(O)}
+                 , #{<<"expires">>         => expires(O)}
                  ]).
 
 -spec deserialize(binary()) -> oracle().
 deserialize(Bin) ->
     {ok, List} = msgpack:unpack(Bin),
-    [ #{<<"type">>              := ?ORACLE_TYPE}
-    , #{<<"vsn">>               := ?ORACLE_VSN}
-    , #{<<"owner">>             := Owner}
-    , #{<<"query_format">>      := QueryFormat}
-    , #{<<"response_format">>   := ResponseFormat}
-    , #{<<"query_fee">>         := QueryFee}
-    , #{<<"expires">>           := Expires}
-    , #{<<"interactions_hash">> := Interactions}
+    [ #{<<"type">>            := ?ORACLE_TYPE}
+    , #{<<"vsn">>             := ?ORACLE_VSN}
+    , #{<<"owner">>           := Owner}
+    , #{<<"query_format">>    := QueryFormat}
+    , #{<<"response_format">> := ResponseFormat}
+    , #{<<"query_fee">>       := QueryFee}
+    , #{<<"expires">>         := Expires}
     ] = List,
-    #oracle{ owner             = Owner
-           , query_format      = QueryFormat
-           , response_format   = ResponseFormat
-           , query_fee         = QueryFee
-           , expires           = Expires
-           , interactions_hash = Interactions
+    #oracle{ owner           = Owner
+           , query_format    = QueryFormat
+           , response_format = ResponseFormat
+           , query_fee       = QueryFee
+           , expires         = Expires
            }.
 
 %%%===================================================================
@@ -142,9 +135,6 @@ query_fee(O) -> O#oracle.query_fee.
 
 -spec expires(oracle()) -> height().
 expires(O) -> O#oracle.expires.
-
--spec interactions_hash(oracle()) -> interactions_hash().
-interactions_hash(O) -> O#oracle.interactions_hash.
 
 %%%===================================================================
 %%% Setters
@@ -169,21 +159,16 @@ set_query_fee(X, O) ->
 set_expires(X, O) ->
     O#oracle{expires = assert_field(expires, X)}.
 
--spec set_interactions_hash(interactions_hash(), oracle()) -> oracle().
-set_interactions_hash(X, O) ->
-    O#oracle{interactions_hash = assert_field(interactions_hash, X)}.
-
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
 
 assert_fields(O) ->
-    List = [ {owner            , O#oracle.owner}
-           , {query_format     , O#oracle.query_format}
-           , {response_format  , O#oracle.response_format}
-           , {query_fee        , O#oracle.query_fee}
-           , {expires          , O#oracle.expires}
-           , {interactions_hash, O#oracle.interactions_hash}
+    List = [ {owner          , O#oracle.owner}
+           , {query_format   , O#oracle.query_format}
+           , {response_format, O#oracle.response_format}
+           , {query_fee      , O#oracle.query_fee}
+           , {expires        , O#oracle.expires}
            ],
     List1 = [try assert_field(X, Y), [] catch _:X -> X end
              || {X, Y} <- List],
@@ -192,10 +177,9 @@ assert_fields(O) ->
         Other -> error({missing, Other})
     end.
 
-assert_field(owner            , <<_:?PUB_SIZE/binary>> = X) -> X;
-assert_field(query_format     , X) when is_binary(X) -> X;
-assert_field(response_format  , X) when is_binary(X) -> X;
-assert_field(query_fee        , X) when is_integer(X), X >= 0 -> X;
-assert_field(expires          , X) when is_integer(X), X >= 0 -> X;
-assert_field(interactions_hash, <<_:?HASH_SIZE/binary>> = X) -> X;
-assert_field(Field            , X) -> error({illegal, Field, X}).
+assert_field(owner          , <<_:?PUB_SIZE/binary>> = X) -> X;
+assert_field(query_format   , X) when is_binary(X) -> X;
+assert_field(response_format, X) when is_binary(X) -> X;
+assert_field(query_fee      , X) when is_integer(X), X >= 0 -> X;
+assert_field(expires        , X) when is_integer(X), X >= 0 -> X;
+assert_field(Field          , X) -> error({illegal, Field, X}).

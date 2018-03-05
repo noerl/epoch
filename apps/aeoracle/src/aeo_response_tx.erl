@@ -7,7 +7,6 @@
 -module(aeo_response_tx).
 
 -include("oracle_txs.hrl").
--include_lib("apps/aecore/include/trees.hrl").
 
 -behavior(aetx).
 
@@ -18,75 +17,75 @@
          origin/1,
          check/3,
          process/3,
+         accounts/1,
          signers/1,
          serialize/1,
          deserialize/1,
-         type/0,
          for_client/1
         ]).
 
 %% Additional getters
 -export([oracle/1,
-         interaction_id/1,
+         query_id/1,
          response/1]).
 
 
--define(ORACLE_RESPONSE_TX_TYPE, <<"oracle_response">>).
 -define(ORACLE_RESPONSE_TX_VSN, 1).
 -define(ORACLE_RESPONSE_TX_FEE, 2).
 
--opaque response_tx() :: #oracle_response_tx{}.
+-opaque tx() :: #oracle_response_tx{}.
 
--export_type([response_tx/0]).
+-export_type([tx/0]).
 
--spec oracle(response_tx()) -> pubkey().
+-spec oracle(tx()) -> pubkey().
 oracle(#oracle_response_tx{oracle = OraclePubKey}) ->
     OraclePubKey.
 
--spec interaction_id(response_tx()) -> aeo_interaction:oracle_tx_id().
-interaction_id(#oracle_response_tx{interaction_id = IId}) ->
-    IId.
+-spec query_id(tx()) -> aeo_query:id().
+query_id(#oracle_response_tx{query_id = QId}) ->
+    QId.
 
--spec response(response_tx()) -> aeo_interaction:oracle_response().
+-spec response(tx()) -> aeo_query:oracle_response().
 response(#oracle_response_tx{response = Response}) ->
     Response.
 
--spec new(map()) -> {ok, response_tx()}.
-new(#{oracle         := Oracle,
-      nonce          := Nonce,
-      interaction_id := IId,
-      response       := Response,
-      fee            := Fee}) ->
-    {ok, #oracle_response_tx{oracle         = Oracle,
-                             nonce          = Nonce,
-                             interaction_id = IId,
-                             response       = Response,
-                             fee            = Fee}}.
+-spec new(map()) -> {ok, aetx:tx()}.
+new(#{oracle   := Oracle,
+      nonce    := Nonce,
+      query_id := QId,
+      response := Response,
+      fee      := Fee}) ->
+    Tx = #oracle_response_tx{oracle   = Oracle,
+                             nonce    = Nonce,
+                             query_id = QId,
+                             response = Response,
+                             fee      = Fee},
+    {ok, aetx:new(?MODULE, Tx)}.
 
--spec fee(response_tx()) -> integer().
+-spec fee(tx()) -> integer().
 fee(#oracle_response_tx{fee = F}) ->
     F.
 
--spec nonce(response_tx()) -> non_neg_integer().
+-spec nonce(tx()) -> non_neg_integer().
 nonce(#oracle_response_tx{nonce = Nonce}) ->
     Nonce.
 
--spec origin(response_tx()) -> pubkey().
+-spec origin(tx()) -> pubkey().
 origin(#oracle_response_tx{oracle = OraclePubKey}) ->
     OraclePubKey.
 
 %% Oracle should exist, and have enough funds for the fee.
-%% Interaction id should match oracle.
--spec check(response_tx(), trees(), height()) -> {ok, trees()} | {error, term()}.
+%% QueryId id should match oracle.
+-spec check(tx(), aec_trees:trees(), height()) -> {ok, aec_trees:trees()} | {error, term()}.
 check(#oracle_response_tx{oracle = OraclePubKey, nonce = Nonce,
-                          interaction_id = IId, fee = Fee}, Trees, Height) ->
-    case fetch_interaction(OraclePubKey, IId, Trees) of
+                          query_id = QId, fee = Fee}, Trees, Height) ->
+    case fetch_query(OraclePubKey, QId, Trees) of
         {value, I} ->
-            ResponseTTL = aeo_interaction:response_ttl(I),
-            QueryFee    = aeo_interaction:fee(I),
+            ResponseTTL = aeo_query:response_ttl(I),
+            QueryFee    = aeo_query:fee(I),
             Checks =
                 [fun() -> check_oracle(OraclePubKey, Trees) end,
-                 fun() -> check_interaction(I, OraclePubKey) end,
+                 fun() -> check_query(I, OraclePubKey) end,
                  fun() -> aetx_utils:check_account(OraclePubKey, Trees,
                                                    Height, Nonce, Fee - QueryFee) end,
                  fun() -> aeo_utils:check_ttl_fee(Height, ResponseTTL,
@@ -96,27 +95,31 @@ check(#oracle_response_tx{oracle = OraclePubKey, nonce = Nonce,
                 ok              -> {ok, Trees};
                 {error, Reason} -> {error, Reason}
             end;
-        none -> {error, no_matching_oracle_interaction}
+        none -> {error, no_matching_oracle_query}
     end.
 
--spec signers(response_tx()) -> [pubkey()].
+-spec accounts(tx()) -> [pubkey()].
+accounts(#oracle_response_tx{oracle = OraclePubKey}) ->
+    [OraclePubKey].
+
+-spec signers(tx()) -> [pubkey()].
 signers(#oracle_response_tx{oracle = OraclePubKey}) ->
     [OraclePubKey].
 
--spec process(response_tx(), trees(), height()) -> {ok, trees()}.
+-spec process(tx(), aec_trees:trees(), height()) -> {ok, aec_trees:trees()}.
 process(#oracle_response_tx{oracle = OraclePubKey, nonce = Nonce,
-                            interaction_id = IId, response = Response,
+                            query_id = QId, response = Response,
                             fee = Fee}, Trees0, Height) ->
     AccountsTree0 = aec_trees:accounts(Trees0),
     OraclesTree0  = aec_trees:oracles(Trees0),
 
-    Interaction0 = aeo_state_tree:get_interaction(OraclePubKey, IId, OraclesTree0),
-    Interaction1 = aeo_interaction:set_response(Response, Interaction0),
-    OraclesTree1 = aeo_state_tree:enter_interaction(Interaction1, OraclesTree0),
+    Query0 = aeo_state_tree:get_query(OraclePubKey, QId, OraclesTree0),
+    Query1 = aeo_query:set_response(Response, Query0),
+    OraclesTree1 = aeo_state_tree:enter_query(Query1, OraclesTree0),
 
     OracleAccount0 = aec_accounts_trees:get(OraclePubKey, AccountsTree0),
     {ok, OracleAccount1} = aec_accounts:spend(OracleAccount0, Fee, Nonce, Height),
-    QueryFee = aeo_interaction:fee(Interaction0),
+    QueryFee = aeo_query:fee(Query0),
     {ok, OracleAccount2} = aec_accounts:earn(OracleAccount1, QueryFee, Nonce),
     AccountsTree1 = aec_accounts_trees:enter(OracleAccount2, AccountsTree0),
 
@@ -125,68 +128,61 @@ process(#oracle_response_tx{oracle = OraclePubKey, nonce = Nonce,
 
     {ok, Trees2}.
 
-serialize(#oracle_response_tx{oracle         = OraclePubKey,
-                              nonce          = Nonce,
-                              interaction_id = IId,
-                              response       = Response,
-                              fee            = Fee}) ->
-    [#{<<"type">>           => type()},
-     #{<<"vsn">>            => version()},
-     #{<<"oracle">>         => OraclePubKey},
-     #{<<"nonce">>          => Nonce},
-     #{<<"interaction_id">> => IId},
-     #{<<"response">>       => Response},
-     #{<<"fee">>            => Fee}].
+serialize(#oracle_response_tx{oracle   = OraclePubKey,
+                              nonce    = Nonce,
+                              query_id = QId,
+                              response = Response,
+                              fee      = Fee}) ->
+    [#{<<"vsn">>      => version()},
+     #{<<"oracle">>   => OraclePubKey},
+     #{<<"nonce">>    => Nonce},
+     #{<<"query_id">> => QId},
+     #{<<"response">> => Response},
+     #{<<"fee">>      => Fee}].
 
-deserialize([#{<<"type">>           := ?ORACLE_RESPONSE_TX_TYPE},
-             #{<<"vsn">>            := ?ORACLE_RESPONSE_TX_VSN},
-             #{<<"oracle">>         := OraclePubKey},
-             #{<<"nonce">>          := Nonce},
-             #{<<"interaction_id">> := IId},
-             #{<<"response">>       := Response},
-             #{<<"fee">>            := Fee}]) ->
-    #oracle_response_tx{oracle         = OraclePubKey,
-                        nonce          = Nonce,
-                        interaction_id = IId,
-                        response       = Response,
-                        fee            = Fee}.
-
--spec type() -> binary().
-type() ->
-    ?ORACLE_RESPONSE_TX_TYPE.
+deserialize([#{<<"vsn">>      := ?ORACLE_RESPONSE_TX_VSN},
+             #{<<"oracle">>   := OraclePubKey},
+             #{<<"nonce">>    := Nonce},
+             #{<<"query_id">> := QId},
+             #{<<"response">> := Response},
+             #{<<"fee">>      := Fee}]) ->
+    #oracle_response_tx{oracle   = OraclePubKey,
+                        nonce    = Nonce,
+                        query_id = QId,
+                        response = Response,
+                        fee      = Fee}.
 
 -spec version() -> non_neg_integer().
 version() ->
     ?ORACLE_RESPONSE_TX_VSN.
 
-for_client(#oracle_response_tx{ oracle         = OraclePubKey,
-                                nonce          = Nonce,
-                                interaction_id = IId,
-                                response       = Response,
-                                fee            = Fee}) ->
-    #{<<"type">> => <<"OracleResponseTxObject">>, % swagger schema name
+for_client(#oracle_response_tx{ oracle   = OraclePubKey,
+                                nonce    = Nonce,
+                                query_id = QId,
+                                response = Response,
+                                fee      = Fee}) ->
+    #{<<"data_schema">> => <<"OracleResponseTxJSON">>, % swagger schema name
       <<"vsn">> => version(),
-      <<"oracle">> => base64:encode(OraclePubKey),
+      <<"oracle">> => aec_base58c:encode(oracle_pubkey, OraclePubKey),
       <<"nonce">> => Nonce,
-      <<"interaction_id">> => IId,
+      <<"query_id">> => aec_base58c:encode(oracle_query_id, QId),
       <<"response">> => Response,
       <<"fee">> => Fee}.
 
-
 %% -- Local functions  -------------------------------------------------------
 
-fetch_interaction(OId, IId, Trees) ->
+fetch_query(OId, QId, Trees) ->
     OraclesTree  = aec_trees:oracles(Trees),
-    aeo_state_tree:lookup_interaction(OId, IId, OraclesTree).
+    aeo_state_tree:lookup_query(OId, QId, OraclesTree).
 
-check_interaction(I, OraclePubKey) ->
-    case OraclePubKey == aeo_interaction:oracle_address(I) of
+check_query(I, OraclePubKey) ->
+    case OraclePubKey == aeo_query:oracle_address(I) of
         true  ->
-            case aeo_interaction:is_closed(I) of
+            case aeo_query:is_closed(I) of
                 true  -> {error, oracle_closed_for_response};
                 false -> ok
             end;
-        false -> {error, oracle_does_not_match_interaction_id}
+        false -> {error, oracle_does_not_match_query_id}
     end.
 
 check_oracle(OraclePubKey, Trees) ->

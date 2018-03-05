@@ -1,0 +1,452 @@
+version: 2
+
+references:
+  container_config: &container_config
+    setup_remote_docker:
+      docker_layer_caching: true
+    docker:
+      - image: aetrnty/builder
+        user: builder
+    working_directory: ~/epoch
+
+  merge_checkout: &merge_checkout
+    run:
+      name: Checkout merged master
+      command: |
+        if [ -n "$CIRCLE_PULL_REQUEST" ]; then
+          git fetch git@github.com:aeternity/epoch.git +refs/pull/${CIRCLE_PULL_REQUEST##*/}/merge
+          git checkout -qf FETCH_HEAD
+          git rev-parse HEAD
+        fi
+
+  rebar_cache_key: &rebar_cache_key rebar-cache-{{ checksum "rebar.lock" }}-{{ checksum "rebar.config" }}
+  restore_rebar_cache: &restore_rebar_cache
+    restore_cache:
+      key: *rebar_cache_key
+
+  build_cache_key: &build_cache_key build-cache-v1-{{ .Revision }}
+  restore_build_cache: &restore_build_cache
+    restore_cache:
+      key: *build_cache_key
+
+  packages_workspace: &packages_workspace /tmp/packages
+  set_package_path: &set_package_path
+    run:
+      name: Set package path
+      environment:
+        PACKAGES_DIR: *packages_workspace
+      command: |
+        if [ "$(uname -s)" == "Darwin" ]; then
+            PKG_SUFFIX="osx-$(sw_vers -productVersion)"
+        elif [ "$(uname -s)" == "Linux" ]; then
+            PKG_SUFFIX="ubuntu"
+        fi
+        export PACKAGE_TARBALL=${PACKAGES_DIR:?}/epoch-$(cat VERSION)-${PKG_SUFFIX}.tar.gz
+        echo "export PACKAGE_TARBALL=${PACKAGE_TARBALL}" >> $BASH_ENV
+
+  build_package: &build_package
+    run:
+      name: Build Package Tarball
+      environment:
+        PACKAGES_DIR: *packages_workspace
+      command: |
+        make prod-package
+        mkdir ${PACKAGES_DIR:?}
+        mv _build/prod/rel/epoch/epoch-$(cat VERSION).tar.gz ${PACKAGE_TARBALL:?}
+
+  package_tests_workspace: &package_tests_workspace /tmp/package_tests
+  test_package: &test_package
+    run:
+      name: Test Package Tarball
+      environment:
+        PACKAGES_DIR: *packages_workspace
+        PACKAGE_TESTS_DIR: *package_tests_workspace
+      command: |
+        epmd -daemon
+        make python-env
+        mkdir ${PACKAGE_TESTS_DIR:?}
+        make python-release-test WORKDIR=${PACKAGE_TESTS_DIR:?} TARBALL=${PACKAGE_TARBALL:?}
+
+  store_package_artifacts: &store_package_artifacts
+    store_artifacts:
+      path: *packages_workspace
+      destination: /
+
+  deploy_steps: &deploy_steps
+    - checkout
+    - attach_workspace:
+        at: *packages_workspace
+    - run:
+        name: Install PIP Requirements
+        command: |
+          pip install --user -r deployment/ansible/pip-requirements.txt
+    - run:
+        name: Deploy
+        environment:
+          PACKAGES_DIR: *packages_workspace
+        command: |
+          export PACKAGE=${PACKAGES_DIR:?}/epoch-$(cat VERSION)-ubuntu.tar.gz
+          cd deployment/ansible
+          ansible-playbook -i inventory/openstack.yml --limit="epoch:&${DEPLOY_ENV:?}" \
+            --extra-vars "package=${PACKAGE:?} env=${DEPLOY_ENV:?}" \
+            deploy.yml
+
+  upload_github_release_asset: &upload_github_release_asset
+    run:
+      name: Upload GitHub Release Asset
+      environment:
+        PACKAGES_DIR: *packages_workspace
+      command: |
+        ./deployment/upload-github-release-assets.sh github_api_token=${GITHUB_API_TOKEN:?} \
+          owner=${CIRCLE_PROJECT_USERNAME} repo=${CIRCLE_PROJECT_REPONAME} \
+          tag=${CIRCLE_TAG} ASSETS=${PACKAGES_DIR:?}/*
+
+jobs:
+  build:
+    <<: *container_config
+    steps:
+      - checkout
+      - *merge_checkout
+      - *restore_rebar_cache
+      - run:
+          name: Build
+          command: ./rebar3 as test do release
+      - save_cache:
+          key: *build_cache_key
+          paths:
+            - "_build"
+            - "apps/aecuckoo/c_src"
+            - "apps/aecuckoo/priv/bin"
+            - "apps/aecuckoo/priv/lib"
+      - save_cache:
+          key: *rebar_cache_key
+          paths:
+            - .cache/rebar3
+
+  test:
+    <<: *container_config
+    steps:
+      - checkout
+      - *merge_checkout
+      - *restore_rebar_cache
+      - *restore_build_cache
+      - run:
+          name: Test
+          command: |
+            epmd -daemon
+            make test
+      - store_test_results:
+          path: _build/test/logs
+      - store_artifacts:
+          path: _build/test/logs
+
+  eunit:
+    <<: *container_config
+    steps:
+      - checkout
+      - *merge_checkout
+      - *restore_rebar_cache
+      - *restore_build_cache
+      - run:
+          name: Test
+          command: |
+            epmd -daemon
+            make eunit
+
+  static_analysis:
+    <<: *container_config
+    steps:
+      - checkout
+      - *merge_checkout
+      - *restore_rebar_cache
+      - *restore_build_cache
+      - run: ./rebar3 edoc
+      - restore_cache:
+          keys:
+            - dialyzer-cache-v2-{{ .Branch }}-{{ .Revision }}
+            - dialyzer-cache-v2-{{ .Branch }}-
+            - dialyzer-cache-v2-
+      - run:
+          name: Update dialyzer PLT
+          command: make dialyzer-install
+      - save_cache:
+          key: dialyzer-cache-v2-{{ .Branch }}-{{ .Revision }}
+          paths:
+            - _build/default/rebar3_20.2.3_plt
+      - run: make dialyzer
+      - run: make swagger-check
+      - run: make rebar-lock-check
+
+  linux_package:
+    <<: *container_config
+    steps:
+      - checkout
+      - *merge_checkout
+      - *set_package_path
+      - *build_package
+      - *test_package
+      - store_artifacts:
+          path: /tmp/package_tests/node1/log
+      - store_artifacts:
+          path: /tmp/package_tests/node2/log
+      - store_artifacts:
+          path: /tmp/package_tests/node3/log
+      - *store_package_artifacts
+      - persist_to_workspace:
+          root: *packages_workspace
+          paths:
+            - "*.tar.gz"
+
+  deploy_api_docs:
+    <<: *container_config
+    steps:
+      - checkout
+      - run:
+          command: |
+            bash deployment/deploy_api_docs.sh
+
+  osx_package:
+    macos:
+      xcode: "9.0"
+    working_directory: ~/epoch
+    steps:
+      - checkout
+      - run:
+          name: Install required tools
+          command: |
+            brew update
+            brew install libsodium
+            brew install file://`pwd`/deployment/homebrew/erlang.rb
+      - *set_package_path
+      - *build_package
+      - *test_package
+      - store_artifacts:
+          path: /tmp/package_tests/node1/log
+      - store_artifacts:
+          path: /tmp/package_tests/node2/log
+      - store_artifacts:
+          path: /tmp/package_tests/node3/log
+      - *store_package_artifacts
+      - persist_to_workspace:
+          root: *packages_workspace
+          paths:
+            - "*.tar.gz"
+
+  uat_tests:
+    <<: *container_config
+    steps:
+      - checkout
+      - *restore_rebar_cache
+      - *restore_build_cache
+      - run:
+          name: UAT Tests
+          command: |
+            epmd -daemon
+            make python-env && make swagger && make multi-build
+            make python-uats
+      - run:
+          name: Prepare JUnit Report
+          command: mv py/nosetests.xml py/junit.xml
+      - store_test_results:
+          path: py
+      - store_artifacts:
+          path: _build/dev1/rel/epoch/log
+          destination: node1/
+      - store_artifacts:
+          path: _build/dev2/rel/epoch/log
+          destination: node2/
+      - store_artifacts:
+          path: _build/dev3/rel/epoch/log
+          destination: node3/
+
+  deploy_integration:
+    <<: *container_config
+    environment:
+      - DEPLOY_ENV: integration
+    steps: *deploy_steps
+
+  deploy_dev1:
+    <<: *container_config
+    environment:
+      - DEPLOY_ENV: dev1
+    steps: *deploy_steps
+
+  deploy_dev2:
+    <<: *container_config
+    environment:
+      - DEPLOY_ENV: dev2
+    steps: *deploy_steps
+
+  deploy_uat:
+    <<: *container_config
+    environment:
+      - DEPLOY_ENV: uat
+    steps: *deploy_steps
+
+  github_release_osx:
+    <<: *container_config
+    steps:
+      - checkout
+      - attach_workspace:
+          at: *packages_workspace
+      - *upload_github_release_asset
+
+  github_release_linux:
+    <<: *container_config
+    steps:
+      - checkout
+      - attach_workspace:
+          at: *packages_workspace
+      - *upload_github_release_asset
+
+# CircleCI skips a job for a tag by default.
+# A job must have a filters tags section to run as a part of a tag push
+# and all its transitively dependent jobs must also have a filters tags section.
+workflows:
+  version: 2
+  build_test_deploy:
+    jobs:
+      - build:
+          filters:
+            branches:
+              ignore:
+                - env/dev1
+                - env/dev2
+            tags:
+              only: /^v.*$/
+
+      - deploy_api_docs:
+          requires:
+            - static_analysis
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v.*$/
+
+      - test:
+          requires:
+            - build
+          filters:
+            branches:
+              ignore:
+                - env/dev1
+                - env/dev2
+            tags:
+              only: /^v.*$/
+
+      - eunit:
+          requires:
+            - build
+          filters:
+            branches:
+              ignore:
+                - env/dev1
+                - env/dev2
+            tags:
+              only: /^v.*$/
+
+      - static_analysis:
+          requires:
+            - build
+          filters:
+            branches:
+              ignore:
+                - env/dev1
+                - env/dev2
+            tags:
+              only: /^v.*$/
+
+      - linux_package:
+          filters:
+            tags:
+              only: /^v.*$/
+
+      - osx_package:
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /^v.*$/
+
+      - deploy_integration:
+          requires:
+            - test
+            - eunit
+            - static_analysis
+            - linux_package
+          filters:
+            branches:
+              only: master
+
+      - deploy_dev1:
+          requires:
+            - linux_package
+          filters:
+            branches:
+              only: env/dev1
+
+      - deploy_dev2:
+          requires:
+            - linux_package
+          filters:
+            branches:
+              only: env/dev2
+
+      - hodl:
+          type: approval
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v.*$/
+
+      - deploy_uat:
+          requires:
+            - test
+            - eunit
+            - static_analysis
+            - linux_package
+            - hodl
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v.*$/
+
+      - github_release_linux:
+          requires:
+            - test
+            - eunit
+            - static_analysis
+            - linux_package
+            - hodl
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v.*$/
+
+      - github_release_osx:
+          requires:
+            - test
+            - eunit
+            - static_analysis
+            - osx_package
+            - hodl
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v.*$/
+
+  nightly:
+    triggers:
+      - schedule:
+          cron: "0 0 * * *"
+          filters:
+            branches:
+              only:
+                - master
+    jobs:
+      - uat_tests

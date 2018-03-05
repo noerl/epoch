@@ -6,11 +6,10 @@
 
 -include_lib("eunit/include/eunit.hrl").
 -include("common.hrl").
--include("core_txs.hrl").
 
 -define(TAB, aec_tx_pool_test_keys).
 
-all_test_() ->
+tx_pool_test_() ->
     {foreach,
      fun() ->
              application:ensure_started(gproc),
@@ -20,21 +19,28 @@ all_test_() ->
              %% Start `aec_keys` merely for generating realistic test
              %% signed txs - as a node would do.
              ets:new(?TAB, [public, ordered_set, named_table]),
+             meck:new(aec_db, [passthrough]),
+             meck:expect(aec_db, write_tx, 3, ok),
+             meck:expect(aec_db, delete_tx, 2, ok),
              TmpKeysDir
      end,
      fun(TmpKeysDir) ->
              ok = aec_test_utils:aec_keys_cleanup(TmpKeysDir),
              ok = application:stop(gproc),
              ets:delete(?TAB),
-             ok = aec_tx_pool:stop()
+             ok = aec_tx_pool:stop(),
+             meck:unload(aec_db),
+             ok
      end,
      [{"No txs in mempool",
        fun() ->
                ?assertEqual({ok, []}, aec_tx_pool:peek(1)),
                ?assertEqual({ok, []}, aec_tx_pool:peek(3)),
+               ?assertEqual(0, aec_tx_pool:size()),
 
                STx1 = a_signed_tx(me, new_pubkey(), 1, 1),
-               ?assertEqual(ok, aec_tx_pool:delete(STx1))
+               ?assertEqual(ok, aec_tx_pool:delete(STx1)),
+               ?assertEqual(0, aec_tx_pool:size())
        end},
       {"As a healthy network peer, the node stores in mempool txs received from peers and serves txs in mempool to peers",
        fun() ->
@@ -104,10 +110,9 @@ all_test_() ->
                  [?assertEqual(ok, aec_tx_pool:push(Tx)) || Tx <- [STx1, STx2, STx3, STx4, STx5]],
                  {ok, CurrentMempoolSigned} = aec_tx_pool:peek(10),
                  %% extract transactions without verification
-                 CurrentMempool = [ aec_tx_sign:data(STx) || STx <- CurrentMempoolSigned ],
+                 CurrentMempool = [ aetx_sign:tx(STx) || STx <- CurrentMempoolSigned ],
 
-                 MempoolOrder = [{Sender, Nonce} || #spend_tx{sender=Sender, nonce=Nonce}
-                                                    <- CurrentMempool],
+                 MempoolOrder = [{aetx:origin(Tx), aetx:nonce(Tx)} || Tx <- CurrentMempool],
                  %% this is not-optimal order: transactions for PK1 are invalid in that order
                  CorrectOrder = [{PK2,1},{PK2,2},{PK1,3},{PK1,2},{PK1,1}],
 
@@ -173,10 +178,14 @@ all_test_() ->
                ?assertEqual({ok, []}, aec_tx_pool:peek(2 = MaxTxs))
       end}]}.
 
+no_tx_pool_size_test() ->
+    ?assertEqual(undefined, aec_tx_pool:size()).
+
 a_signed_tx(Sender, Recipient, Nonce, Fee) ->
-    Tx = #spend_tx{sender = acct(Sender),
-                   recipient = acct(Recipient),
-                   nonce = Nonce, fee = Fee},
+    {ok, Tx} = aec_spend_tx:new(#{sender => acct(Sender),
+                                  recipient => acct(Recipient),
+                                  amount => 0,
+                                  nonce => Nonce, fee => Fee}),
     {ok, STx} = sign(Sender, Tx),
     STx.
 
@@ -185,9 +194,9 @@ sign(me, Tx) ->
 sign(PubKey, Tx) ->
     try
         [{_, PrivKey}] = ets:lookup(?TAB, PubKey),
-        Signers = aec_tx:signers(Tx),
+        Signers = aetx:signers(Tx),
         true = lists:member(PubKey, Signers),
-        {ok, aec_tx_sign:sign(Tx, PrivKey)}
+        {ok, aetx_sign:sign(Tx, PrivKey)}
     catch
         error:Err ->
             erlang:error({Err, erlang:stacktrace()})

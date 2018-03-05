@@ -12,15 +12,20 @@
 -compile({parse_transform, ct_eunit_xform}).
 
 -define(STARTED_APPS_WHITELIST, [{erlexec,"OS Process Manager","1.7.1"}]).
+-define(TO_BE_STOPPED_APPS_BLACKLIST, [erlexec]).
 -define(REGISTERED_PROCS_WHITELIST,
         [cover_server, timer_server, %% by test framework
          exec_app, exec, %% by erlexec
          inet_gethost_native_sup, inet_gethost_native, %% by inet
-         prfTarg  %% by eper
+         prfTarg,  %% by eper
+         dets_sup, dets  %% by mnesia
         ]).
 
-all() ->
-    [{group, eunit}, application_test, aec_sync_test].
+-ifdef(EUNIT_INCLUDED).
+all() -> [ {group, eunit}, application_test, aec_sync_test].
+-else.
+all() -> [ application_test, aec_sync_test ].
+-endif.
 
 groups() ->
     [].
@@ -98,7 +103,7 @@ application_test(Config) ->
     ok = application:stop(aecore),
     meck:unload(aec_genesis_block_settings),
 
-    app_stop(StartedApps, TempDir).
+    app_stop(StartedApps -- ?TO_BE_STOPPED_APPS_BLACKLIST, TempDir).
 
 aec_sync_test(Config) ->
     application:set_env(jobs, queues,
@@ -130,23 +135,35 @@ aec_sync_test(Config) ->
     1 = length(Peers),
 
     ok = application:stop(aecore),
-    app_stop(StartedApps, TempDir).
+    app_stop(StartedApps -- ?TO_BE_STOPPED_APPS_BLACKLIST, TempDir).
 
 
-prepare_app_start(App, Config) -> 
+prepare_app_start(App, Config) ->
+    try prepare_app_start_(App, Config)
+    catch
+        error:Reason ->
+            error({Reason, erlang:get_stacktrace()})
+    end.
+
+prepare_app_start_(App, Config) ->
     application:load(App),
     TempDir = aec_test_utils:create_temp_key_dir(),
     application:set_env(aecore, keys_dir, TempDir),
     application:set_env(aecore, password, <<"secret">>),
 
-    {ok, Deps} = application:get_key(App, applications), 
+    {ok, Deps0} = application:get_key(App, applications),
+    Deps = maybe_add_mnesia(App, Deps0), % mnesia is started manually in aecore_app
     AlreadyRunning = [ Name || {Name, _,_} <- proplists:get_value(running_apps, Config) ],
     [ ok = application:ensure_started(Dep) || Dep <- Deps ],
     {ok, lists:reverse(Deps -- AlreadyRunning), TempDir}.
 
 app_stop(Apps, TempDir) ->
     aec_test_utils:remove_temp_key_dir(TempDir),
-    [ ok = application:stop(App) || App <- Apps ],
-    timer:sleep(200),
+    [ application:stop(App) || App <- Apps ],
     ok.
 
+maybe_add_mnesia(App, Deps) ->
+    case lists:member(aecore, [App|Deps]) of
+        true  -> Deps ++ [mnesia];
+        false -> Deps
+    end.

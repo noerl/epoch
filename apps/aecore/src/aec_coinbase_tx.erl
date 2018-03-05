@@ -11,48 +11,52 @@
          origin/1,
          check/3,
          process/3,
+         accounts/1,
          signers/1,
          serialize/1,
          deserialize/1,
-         type/0,
          for_client/1]).
 
 -behavior(aetx).
 
 -include("common.hrl").
--include("trees.hrl").
--include("core_txs.hrl").
 
+-record(coinbase_tx, {account       = <<>> :: pubkey(),
+                      block_height  :: non_neg_integer()}).
 
--spec new(map()) -> {ok, coinbase_tx()}.
-new(#{account := AccountPubkey}) ->
-    {ok, #coinbase_tx{account = AccountPubkey}}.
+-opaque tx() :: #coinbase_tx{}.
 
--spec fee(coinbase_tx()) -> integer().
+-export_type([tx/0]).
+
+-spec new(map()) -> {ok, aetx:tx()}.
+new(#{account := AccountPubkey, block_height := Height}) ->
+    {ok, aetx:new(?MODULE, #coinbase_tx{account = AccountPubkey,
+                                        block_height = Height })}.
+
+-spec fee(tx()) -> integer().
 fee(#coinbase_tx{}) ->
     0.
 
--spec nonce(coinbase_tx()) -> undefined.
+-spec nonce(tx()) -> undefined.
 nonce(#coinbase_tx{}) ->
     undefined.
 
--spec origin(coinbase_tx()) -> undefined.
+-spec origin(tx()) -> undefined.
 origin(#coinbase_tx{}) ->
     undefined.
 
--spec check(coinbase_tx(), trees(), height()) -> {ok, trees()} | {error, term()}.
-check(#coinbase_tx{account = AccountPubkey}, Trees0, Height) ->
-    case aec_tx_common:ensure_account_at_height(AccountPubkey, Trees0, Height) of
-        {ok, Trees} ->
-            {ok, Trees};
-        {error, account_height_too_big} = Error ->
-            Error
-    end.
+-spec check(tx(), aec_trees:trees(), height()) ->
+                    {ok, aec_trees:trees()} | {error, term()}.
+check(#coinbase_tx{block_height = CBHeight}, _Trees, Height)
+    when CBHeight =/= Height ->
+    {error, wrong_height};
+check(#coinbase_tx{account = AccountPubkey}, Trees, Height) ->
+    aec_trees:ensure_account_at_height(AccountPubkey, Trees, Height).
 
 %% Only aec_governance:block_mine_reward() is granted to miner's account here.
 %% Amount from all the fees of transactions included in the block
-%% is added to miner's account in aec_tx:apply_signed/3.
--spec process(coinbase_tx(), trees(), height()) -> {ok, trees()}.
+%% is added to miner's account in aec_trees:apply_signed_txs/3.
+-spec process(tx(), aec_trees:trees(), height()) -> {ok, aec_trees:trees()}.
 process(#coinbase_tx{account = AccountPubkey}, Trees0, Height) ->
     AccountsTrees0 = aec_trees:accounts(Trees0),
     {value, Account0} = aec_accounts_trees:lookup(AccountPubkey, AccountsTrees0),
@@ -64,32 +68,30 @@ process(#coinbase_tx{account = AccountPubkey}, Trees0, Height) ->
     Trees = aec_trees:set_accounts(Trees0, AccountsTrees),
     {ok, Trees}.
 
--spec signers(coinbase_tx()) -> [pubkey()].
+-spec accounts(tx()) -> [pubkey()].
+accounts(#coinbase_tx{account = AccountPubkey}) -> [AccountPubkey].
+
+-spec signers(tx()) -> [pubkey()].
 signers(#coinbase_tx{account = AccountPubkey}) -> [AccountPubkey].
 
-
--define(CB_TX_TYPE, <<"coinbase">>).
 -define(CB_TX_VSN, 1).
 
--spec serialize(coinbase_tx()) -> [map()].
-serialize(#coinbase_tx{account = Account}) ->
-    [#{<<"type">> => type()},
-     #{<<"vsn">> => version()},
-     #{<<"acct">> => Account}].
+-spec serialize(tx()) -> [map()].
+serialize(#coinbase_tx{account = Account, block_height = Height}) ->
+    [#{<<"vsn">> => version()},
+     #{<<"acct">> => Account},
+     #{<<"h">> => Height}].
 
--spec deserialize([map()]) -> coinbase_tx().
-deserialize([#{<<"type">> := ?CB_TX_TYPE},
-             #{<<"vsn">>  := ?CB_TX_VSN},
-             #{<<"acct">> := Account}]) ->
-    #coinbase_tx{account = Account}.
+-spec deserialize([map()]) -> tx().
+deserialize([#{<<"vsn">>  := ?CB_TX_VSN},
+             #{<<"acct">> := Account},
+             #{<<"h">> := Height}]) ->
+    #coinbase_tx{account = Account, block_height = Height}.
 
--spec type() -> binary().
-type() ->
-    ?CB_TX_TYPE.
-
-for_client(#coinbase_tx{account = Account}) ->
+for_client(#coinbase_tx{account = Account, block_height = Height}) ->
     #{<<"account">> => aec_base58c:encode(account_pubkey,Account),
-      <<"type">> => <<"CoinbaseTxObject">>, % swagger schema name
+      <<"data_schema">> => <<"CoinbaseTxJSON">>, % swagger schema name
+      <<"block_height">> => Height,
       <<"vsn">> => ?CB_TX_VSN}.
 
 version() ->

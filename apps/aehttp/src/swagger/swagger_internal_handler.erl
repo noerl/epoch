@@ -56,6 +56,22 @@ rest_init(Req0, {Operations, LogicHandler, ValidatorState}) ->
 allowed_methods(
     Req,
     State = #state{
+        operation_id = 'GetAccountBalance'
+    }
+) ->
+    {[<<"GET">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'GetAccountTransactions'
+    }
+) ->
+    {[<<"GET">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
         operation_id = 'GetActiveRegisteredOracles'
     }
 ) ->
@@ -152,6 +168,14 @@ allowed_methods(
 allowed_methods(
     Req,
     State = #state{
+        operation_id = 'GetPeers'
+    }
+) ->
+    {[<<"GET">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
         operation_id = 'GetPendingBlockTxsCount'
     }
 ) ->
@@ -164,6 +188,94 @@ allowed_methods(
     }
 ) ->
     {[<<"GET">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'GetTransactionFromBlockHash'
+    }
+) ->
+    {[<<"GET">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'GetTransactionFromBlockHeight'
+    }
+) ->
+    {[<<"GET">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'GetTransactionFromBlockLatest'
+    }
+) ->
+    {[<<"GET">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'GetTxsListFromBlockRangeByHash'
+    }
+) ->
+    {[<<"GET">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'GetTxsListFromBlockRangeByHeight'
+    }
+) ->
+    {[<<"GET">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'PostNameClaimTx'
+    }
+) ->
+    {[<<"POST">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'PostNamePreclaimTx'
+    }
+) ->
+    {[<<"POST">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'PostNameRevokeTx'
+    }
+) ->
+    {[<<"POST">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'PostNameTransferTx'
+    }
+) ->
+    {[<<"POST">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'PostNameUpdateTx'
+    }
+) ->
+    {[<<"POST">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'PostOracleExtendTx'
+    }
+) ->
+    {[<<"POST">>], Req, State};
 
 allowed_methods(
     Req,
@@ -185,22 +297,6 @@ allowed_methods(
     Req,
     State = #state{
         operation_id = 'PostOracleResponseTx'
-    }
-) ->
-    {[<<"POST">>], Req, State};
-
-allowed_methods(
-    Req,
-    State = #state{
-        operation_id = 'PostOracleSubscribe'
-    }
-) ->
-    {[<<"POST">>], Req, State};
-
-allowed_methods(
-    Req,
-    State = #state{
-        operation_id = 'PostOracleUnsubscribe'
     }
 ) ->
     {[<<"POST">>], Req, State};
@@ -224,6 +320,37 @@ allowed_methods(Req, State) ->
     }.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 is_authorized(Req, State) ->
     {true, Req, State}.
 
@@ -241,6 +368,26 @@ content_types_accepted(Req, State) ->
 
 -spec valid_content_headers(Req :: cowboy_req:req(), State :: state()) ->
     {Value :: boolean(), Req :: cowboy_req:req(), State :: state()}.
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'GetAccountBalance'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'GetAccountTransactions'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
 
 valid_content_headers(
     Req0,
@@ -365,6 +512,16 @@ valid_content_headers(
 valid_content_headers(
     Req0,
     State = #state{
+        operation_id = 'GetPeers'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
         operation_id = 'GetPendingBlockTxsCount'
     }
 ) ->
@@ -376,6 +533,116 @@ valid_content_headers(
     Req0,
     State = #state{
         operation_id = 'GetPubKey'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'GetTransactionFromBlockHash'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'GetTransactionFromBlockHeight'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'GetTransactionFromBlockLatest'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'GetTxsListFromBlockRangeByHash'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'GetTxsListFromBlockRangeByHeight'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'PostNameClaimTx'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'PostNamePreclaimTx'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'PostNameRevokeTx'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'PostNameTransferTx'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'PostNameUpdateTx'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'PostOracleExtendTx'
     }
 ) ->
     Headers = [],
@@ -406,26 +673,6 @@ valid_content_headers(
     Req0,
     State = #state{
         operation_id = 'PostOracleResponseTx'
-    }
-) ->
-    Headers = [],
-    {Result, Req} = validate_headers(Headers, Req0),
-    {Result, Req, State};
-
-valid_content_headers(
-    Req0,
-    State = #state{
-        operation_id = 'PostOracleSubscribe'
-    }
-) ->
-    Headers = [],
-    {Result, Req} = validate_headers(Headers, Req0),
-    {Result, Req, State};
-
-valid_content_headers(
-    Req0,
-    State = #state{
-        operation_id = 'PostOracleUnsubscribe'
     }
 ) ->
     Headers = [],

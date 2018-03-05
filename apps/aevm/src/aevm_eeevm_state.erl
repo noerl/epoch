@@ -1,4 +1,3 @@
--module(aevm_eeevm_state).
 %%%-------------------------------------------------------------------
 %%% @author Happi (Erik Stenman)
 %%% @copyright (C) 2017, Aeternity Anstalt
@@ -8,6 +7,7 @@
 %%% Created : 2 Oct 2017
 %%%-------------------------------------------------------------------
 
+-module(aevm_eeevm_state).
 -export([ accountbalance/2
 	, address/1
 	, blockhash/3
@@ -50,7 +50,7 @@
 	]).
 
 -include("aevm_eeevm.hrl").
- 
+
 init(Spec) -> init(Spec, #{}).
 
 init(#{ env  := Env
@@ -115,8 +115,9 @@ get_balances(#{} = Pre) ->
 
 get_blockhash_fun(Opts, Env, H) ->
     case maps:get(blockhash, Opts, default) of
-	default -> fun(N,A) -> aevm_eeevm_env:get_block_hash(H,N,A) end;
-	sha3 -> fun(N,_A) -> 
+	%% default -> fun(N,A) -> aevm_eeevm_env:get_block_hash(H,N,A) end;
+	%% sha3 ->
+	_ -> fun(N,_A) ->
 			%% Because the data of the blockchain is not
 			%% given, the opcode BLOCKHASH could not
 			%% return the hashes of the corresponding
@@ -127,13 +128,13 @@ get_blockhash_fun(Opts, Env, H) ->
 			   CurrentNumber - 256 > N -> 0;
 			   true ->
 				BinN = integer_to_binary(N),
-				Hash = sha3:hash(256, BinN),
+				Hash = aec_hash:hash(evm, BinN),
 				<<Val:256/integer-unsigned>> = Hash,
 				Val
 			end
 		end
     end.
-    
+
 
 
 init_trace_fun(Opts) ->
@@ -157,7 +158,7 @@ extcode(Account, Start, Length, State) ->
     CodeBlock = maps:get(Account band ?MASK160,
 			 maps:get(ext_code_blocks, State), <<>>),
     aevm_eeevm_utils:bin_copy(Start, Length, CodeBlock).
-    
+
 jumpdests(State) -> maps:get(jumpdests, State).
 stack(State)     -> maps:get(stack, State).
 mem(State)       -> maps:get(memory, State).
@@ -194,11 +195,11 @@ add_trace(T, State) ->
     maps:put(trace, Trace ++ [T], State).
 
 trace_format(String, Argument, State) ->
-    CP   = aevm_eeevm_state:cp(State),
-    Code = aevm_eeevm_state:code(State),
-    OP   = aevm_eeevm:code_get_op(CP, Code),
     case do_trace(State) of
 	true ->
+	    CP   = aevm_eeevm_state:cp(State),
+	    Code = aevm_eeevm_state:code(State),
+	    OP   = aevm_eeevm:code_get_op(CP, Code),
 	    F = trace_fun(State),
 	    F("~8.16.0B : ~w", [CP, aevm_opcodes:op_name(OP)]),
 	    F(" ~w", [stack(State)]),

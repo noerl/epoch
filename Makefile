@@ -124,6 +124,8 @@ test:
 eunit:
 	@./rebar3 do eunit $(EUNIT_TEST_FLAGS)
 
+all-tests: eunit test
+
 aevm-test: aevm-test-deps
 	@./rebar3 eunit --application=aevm
 
@@ -149,24 +151,43 @@ python-single-uat:
 	( cd $(PYTHON_DIR) && TEST_NAME=$(TEST_NAME) $(MAKE) single-uat; )
 
 python-release-test:
-	( cd $(PYTHON_DIR) && TARBALL=$(TARBALL) VER=$(VER) $(MAKE) release-test; )
+	( cd $(PYTHON_DIR) && WORKDIR="$(WORKDIR)" TARBALL=$(TARBALL) VER=$(VER) $(MAKE) release-test; )
 
-swagger: config/swagger.yaml
-	@swagger-codegen generate -i $< -l erlang-server -o $(SWTEMP)
+SWAGGER_CODEGEN_CLI_V = 2.3.1
+SWAGGER_CODEGEN_CLI = swagger/swagger-codegen-cli-$(SWAGGER_CODEGEN_CLI_V).jar
+SWAGGER_CODEGEN = java -jar $(SWAGGER_CODEGEN_CLI)
+
+swagger: config/swagger.yaml $(SWAGGER_CODEGEN_CLI)
+	@$(SWAGGER_CODEGEN) generate -i $< -l erlang-server -o $(SWTEMP)
 	@echo "Swagger tempdir: $(SWTEMP)"
-	@cp $(SWTEMP)/priv/swagger.json $(HTTP_APP)/priv/
-	( cd $(HTTP_APP) && $(MAKE) updateswagger; )
-	@cp $(SWTEMP)/src/*.erl $(HTTP_APP)/src/swagger
+	@( mkdir -p $(HTTP_APP)/priv && cp $(SWTEMP)/priv/swagger.json $(HTTP_APP)/priv/; )
+	@( cd $(HTTP_APP) && $(MAKE) updateswagger; )
+	@( mkdir -p $(HTTP_APP)/src/swagger && cp $(SWTEMP)/src/*.erl $(HTTP_APP)/src/swagger; )
+	@rm -fr $(SWTEMP)
+	@./rebar3 swagger_endpoints
+	@$(SWAGGER_CODEGEN) generate -i $< -l python -o $(SWTEMP)
+	@echo "Swagger python tempdir: $(SWTEMP)"
+	@cp -r $(SWTEMP)/swagger_client $(PYTHON_TESTS)
 	@rm -fr $(SWTEMP)
 
 swagger-docs:
 	(cd ./apps/aehttp && $(MAKE) swagger-docs);
 
-swagger-python: config/swagger.yaml
-	@swagger-codegen generate -i $< -l python -o $(SWTEMP)
-	@echo "Swagger python tempdir: $(SWTEMP)"
-	@cp -r $(SWTEMP)/swagger_client $(PYTHON_TESTS)
-	@rm -fr $(SWTEMP)
+swagger-check:
+	./swagger/check \
+		"$(CURDIR)/config/swagger.yaml" \
+		"swagger" \
+		"$(CURDIR)/apps/aehttp/priv/swagger.json" \
+		"$(CURDIR)/apps/aehttp/src/swagger" \
+		"$(CURDIR)/py/tests/swagger_client"
+
+$(SWAGGER_CODEGEN_CLI):
+	curl -fsS --create-dirs -o $@ http://central.maven.org/maven2/io/swagger/swagger-codegen-cli/$(SWAGGER_CODEGEN_CLI_V)/swagger-codegen-cli-$(SWAGGER_CODEGEN_CLI_V).jar
+
+rebar-lock-check:
+	./scripts/rebar_lock_check \
+		"$(CURDIR)/rebar3" \
+		"$(CURDIR)"
 
 kill:
 	@echo "Kill all beam processes only from this directory tree"
@@ -178,9 +199,13 @@ killall:
 
 clean:
 	@./rebar3 clean
+	( cd apps/aering/test/contracts && $(MAKE) clean; )
+	( cd $(HTTP_APP) && $(MAKE) clean; )
+	@rm -rf _build/
 
 distclean: clean
 	( cd apps/aecuckoo && $(MAKE) distclean; )
+	( cd otp_patches && $(MAKE) distclean; )
 	( cd $(HTTP_APP) && $(MAKE) distclean; )
 
 multi-build: dev1-build
@@ -230,4 +255,6 @@ internal-clean: $$(KIND)
 	dialyzer \
 	test aevm-test-deps\
 	kill killall \
-	clean distclean
+	clean distclean \
+	swagger swagger-docs swagger-check \
+	rebar-lock-check

@@ -17,14 +17,11 @@
          set_target/2,
          new/3,
          new_with_state/3,
+         from_header_and_txs/2,
          to_header/1,
-         serialize_for_network/1,
-         deserialize_from_network/1,
-         serialize_for_store/1,
-         deserialize_from_store/1,
          serialize_to_map/1,
          deserialize_from_map/1,
-         serialize_client_readable/1,
+         serialize_client_readable/2,
          hash_internal_representation/1,
          root_hash/1,
          validate/1,
@@ -34,16 +31,15 @@
 -compile([export_all, nowarn_export_all]).
 -endif.
 
--export_type([block_serialized_for_network/0]).
-
 -include("common.hrl").
 -include("blocks.hrl").
--include("core_txs.hrl").
 
+%% block() can't be opaque since aec_block_genesis also needs to
+%% be able to handle the raw #block{} record - TODO: change this
+-type block() :: #block{}.
+-export_type([block/0]).
 
 -define(CURRENT_BLOCK_VERSION, ?GENESIS_VERSION).
-
--type block_serialized_for_network() :: binary().
 
 -spec prev_hash(block()) -> block_header_hash().
 prev_hash(Block) ->
@@ -82,7 +78,7 @@ set_target(Block, Target) ->
     Block#block{target = Target}.
 
 %% TODO: have a spec for list of transactions
--spec txs(block()) -> list(aec_tx_sign:signed_tx()).
+-spec txs(block()) -> list(aetx_sign:signed_tx()).
 txs(Block) ->
     Block#block.txs.
 
@@ -90,12 +86,13 @@ txs(Block) ->
 txs_hash(Block) ->
     Block#block.txs_hash.
 
--spec new(block(), list(aec_tx_sign:signed_tx()), trees()) -> block().
+-spec new(block(), list(aetx_sign:signed_tx()), aec_trees:trees()) -> block().
 new(LastBlock, Txs, Trees0) ->
     {B, _} = new_with_state(LastBlock, Txs, Trees0),
     B.
 
--spec new_with_state(block(), list(aec_tx_sign:signed_tx()), trees()) -> {block(), trees()}.
+-spec new_with_state(block(), list(aetx_sign:signed_tx()), aec_trees:trees()) ->
+                                {block(), aec_trees:trees()}.
 new_with_state(LastBlock, Txs, Trees0) ->
     LastBlockHeight = height(LastBlock),
     {ok, LastBlockHeaderHash} = hash_internal_representation(LastBlock),
@@ -104,9 +101,9 @@ new_with_state(LastBlock, Txs, Trees0) ->
     %% We should not have any transactions with invalid signatures for
     %% creation of block candidate, as only txs with validated signatures should land in mempool.
     %% Let's hardcode this expectation for now.
-    Txs = aec_tx:filter_out_invalid_signatures(Txs),
+    Txs = aetx_sign:filter_invalid_signatures(Txs),
 
-    {ok, Txs1, Trees} = aec_tx:apply_signed(Txs, Trees0, Height),
+    {ok, Txs1, Trees} = aec_trees:apply_signed_txs(Txs, Trees0, Height),
     {ok, TxsRootHash} = aec_txs_trees:root_hash(aec_txs_trees:from_txs(Txs1)),
     NewBlock =
         #block{height = Height,
@@ -119,7 +116,7 @@ new_with_state(LastBlock, Txs, Trees0) ->
                version = ?CURRENT_BLOCK_VERSION},
     {NewBlock, Trees}.
 
--spec to_header(block()) -> header().
+-spec to_header(block()) -> aec_headers:header().
 to_header(#block{height = Height,
                  prev_hash = PrevHash,
                  txs_hash = TxsHash,
@@ -139,12 +136,33 @@ to_header(#block{height = Height,
             pow_evidence = Evd,
             version = Version}.
 
--spec serialize_for_network(block()) -> {ok, block_serialized_for_network()}.
-serialize_for_network(B = #block{}) ->
-    {ok, jsx:encode(serialize_to_map(B))}.
+from_header_and_txs(#header{height = Height,
+                            prev_hash = PrevHash,
+                            txs_hash = TxsHash,
+                            root_hash = RootHash,
+                            target = Target,
+                            nonce = Nonce,
+                            time = Time,
+                            pow_evidence = Evd,
+                            version = Version}, Txs) ->
+    #block{height = Height,
+           prev_hash = PrevHash,
+           txs_hash = TxsHash,
+           root_hash = RootHash,
+           target = Target,
+           nonce = Nonce,
+           time = Time,
+           version = Version,
+           pow_evidence = Evd,
+           txs = Txs
+          }.
 
-serialize_client_readable(B) ->
-    serialize_to_map(B, fun aec_tx_sign:serialize_for_client/1).
+serialize_client_readable(Encoding, B) ->
+    serialize_to_map(B,
+                     fun(Tx) ->
+                         H = to_header(B),
+                         aetx_sign:serialize_for_client(Encoding, H, Tx)
+                      end).
 
 serialize_to_map(B = #block{}) ->
     serialize_to_map(B, fun serialize_tx/1).
@@ -164,69 +182,11 @@ serialize_to_map(B = #block{}, SerializeTxFun) ->
 
 serialize_tx(Tx) ->
     #{<<"tx">> => aec_base58c:encode(
-                    transaction, aec_tx_sign:serialize_to_binary(Tx))}.
+                    transaction, aetx_sign:serialize_to_binary(Tx))}.
 
 deserialize_tx(#{<<"tx">> := Bin}) ->
     {transaction, Dec} = aec_base58c:decode(Bin),
-    aec_tx_sign:deserialize_from_binary(Dec).
-
--define(STORAGE_VERSION, 1).
-serialize_for_store(B = #block{}) ->
-    Bin = term_to_binary({?STORAGE_VERSION,
-                          height(B),
-                          prev_hash(B),
-                          B#block.root_hash,
-                          B#block.txs_hash,
-                          B#block.target,
-                          B#block.nonce,
-                          B#block.time,
-                          B#block.version,
-                          B#block.pow_evidence,
-                          B#block.txs}, [{compressed,9}]),
-    <<?STORAGE_TYPE_BLOCK:8, Bin/binary>>.
-
-deserialize_from_store(<<?STORAGE_TYPE_BLOCK, Bin/binary>>) ->
-    case binary_to_term(Bin) of
-        {?STORAGE_VERSION,
-         Height,
-         PrevHash,
-         RootHash,
-         TxsHash,
-         Target,
-         Nonce,
-         Time,
-         Version,
-         PowEvidence,
-         Txs} when Nonce >= 0,
-                   Nonce =< ?MAX_NONCE ->
-            {ok,
-             #block{
-                height = Height,
-                prev_hash = PrevHash,
-                root_hash = RootHash,
-                txs_hash = TxsHash,
-                target = Target,
-                nonce = Nonce,
-                time = Time,
-                version = Version,
-                txs = Txs,
-                pow_evidence = PowEvidence}
-            };
-        T when tuple_size(T) > 0 ->
-            case element(1, T) of
-                I when is_integer(I), I > ?STORAGE_VERSION ->
-                    exit({future_storage_version, I, Bin});
-                %% Add handler of old version here when upgrading version.
-                I when is_integer(I), I < ?STORAGE_VERSION ->
-                    exit({old_forgotten_storage_version, I, Bin})
-            end
-    end;
-deserialize_from_store(_) -> false.
-
-
--spec deserialize_from_network(block_serialized_for_network()) -> {ok, block()}.
-deserialize_from_network(B) when is_binary(B) ->
-    deserialize_from_map(jsx:decode(B, [return_maps])).
+    aetx_sign:deserialize_from_binary(Dec).
 
 deserialize_from_map(#{<<"nonce">> := Nonce}) when Nonce < 0;
                                                    Nonce > ?MAX_NONCE ->
@@ -275,7 +235,7 @@ validate_coinbase_txs_count(#block{txs = Txs}) ->
     CoinbaseTxsCount =
         lists:foldl(
           fun(SignedTx, Count) ->
-                  case aec_tx:is_coinbase(SignedTx) of
+                  case aetx_sign:is_coinbase(SignedTx) of
                       true ->
                           Count + 1;
                       false ->
@@ -301,7 +261,7 @@ validate_txs_hash(#block{txs = Txs,
     end.
 
 validate_no_txs_with_invalid_signature(#block{txs = Txs}) ->
-    FilteredTxs = aec_tx:filter_out_invalid_signatures(Txs),
+    FilteredTxs = aetx_sign:filter_invalid_signatures(Txs),
     case FilteredTxs =:= Txs of
         true ->
             ok;
@@ -312,4 +272,4 @@ validate_no_txs_with_invalid_signature(#block{txs = Txs}) ->
 cointains_coinbase_tx(#block{txs = []}) ->
     false;
 cointains_coinbase_tx(#block{txs = [CoinbaseTx | _Rest]}) ->
-    aec_tx:is_coinbase(CoinbaseTx).
+    aetx_sign:is_coinbase(CoinbaseTx).

@@ -11,7 +11,10 @@
         ]).
 
 %% test case exports
--export([ prune_oracle/1
+-export([ extend_oracle/1
+        , extend_oracle_negative/1
+        , prune_oracle/1
+        , prune_oracle_extend/1
         , prune_query/1
         , prune_response/1
         , query_oracle/1
@@ -36,15 +39,19 @@ all() ->
 
 groups() ->
     [ {all_tests, [sequence], [ {group, transactions}
+                              , {group, state_tree}
                               ]}
     , {transactions, [sequence], [ register_oracle
                                  , register_oracle_negative
+                                 , extend_oracle
+                                 , extend_oracle_negative
                                  , query_oracle
                                  , query_oracle_negative
                                  , query_response
                                  , query_response_negative
                                  ]}
     , {state_tree, [ prune_oracle
+                   , prune_oracle_extend
                    , prune_query
                    , prune_response
                    ]}
@@ -62,23 +69,23 @@ register_oracle_negative(_Cfg) ->
     %% Test registering a bogus account
     BadPubKey = <<42:65/unit:8>>,
     RTx1      = aeo_test_utils:register_tx(BadPubKey, S1),
-    {error, account_not_found} = aeo_register_tx:check(RTx1, Trees, CurrHeight),
+    {error, account_not_found} = aetx:check(RTx1, Trees, CurrHeight),
 
     %% Insufficient funds
     S2     = aeo_test_utils:set_account_balance(PubKey, 0, S1),
     Trees2 = aeo_test_utils:trees(S2),
     RTx2 = aeo_test_utils:register_tx(PubKey, S1),
     {error, insufficient_funds} =
-        aeo_register_tx:check(RTx2, Trees2, CurrHeight),
+        aetx:check(RTx2, Trees2, CurrHeight),
 
     %% Test too high account nonce
     RTx3 = aeo_test_utils:register_tx(PubKey, #{nonce => 0}, S1),
     {error, account_nonce_too_high} =
-        aeo_register_tx:check(RTx3, Trees, CurrHeight),
+        aetx:check(RTx3, Trees, CurrHeight),
 
     %% Test too low fee
     RTx4 = aeo_test_utils:register_tx(PubKey, #{fee => 0}, S1),
-    {error, too_low_fee} = aeo_register_tx:check(RTx4, Trees, CurrHeight),
+    {error, too_low_fee} = aetx:check(RTx4, Trees, CurrHeight),
     ok.
 
 register_oracle(_Cfg) ->
@@ -87,12 +94,76 @@ register_oracle(_Cfg) ->
     PrivKey      = aeo_test_utils:priv_key(PubKey, S1),
 
     %% Test that RegisterTX is accepted
-    SignedTx = aec_tx_sign:sign(Tx, PrivKey),
+    SignedTx = aetx_sign:sign(Tx, PrivKey),
     Trees    = aeo_test_utils:trees(S1),
     Height   = 1,
-    {ok, [SignedTx], Trees1} = aec_tx:apply_signed([SignedTx], Trees, Height),
+    {ok, [SignedTx], Trees1} = aec_trees:apply_signed_txs([SignedTx], Trees, Height),
     S2       = aeo_test_utils:set_trees(Trees1, S1),
     {PubKey, S2}.
+
+%%%===================================================================
+%%% Extend oracle
+%%%===================================================================
+
+extend_oracle_negative(Cfg) ->
+    {PubKey, S1} = aeo_test_utils:setup_new_account(aeo_test_utils:new_state()),
+    Trees        = aeo_test_utils:trees(S1),
+    CurrHeight   = 1,
+
+    %% Test registering a bogus account
+    BadPubKey = <<42:65/unit:8>>,
+    RTx1      = aeo_test_utils:extend_tx(BadPubKey, S1),
+    {error, account_not_found} = aetx:check(RTx1, Trees, CurrHeight),
+
+    %% Test extending non-existent oracle
+    RTx2 = aeo_test_utils:extend_tx(PubKey, S1),
+    {error, account_is_not_an_active_oracle} =
+        aetx:check(RTx2, Trees, CurrHeight),
+
+    %% Register the oracle
+    {OracleKey, S2} = register_oracle(Cfg),
+    Trees2          = aeo_test_utils:trees(S2),
+    CurrHeight2     = 3,
+
+    %% Insufficient funds
+    S3     = aeo_test_utils:set_account_balance(OracleKey, 0, S2),
+    Trees3 = aeo_test_utils:trees(S3),
+    RTx3 = aeo_test_utils:extend_tx(OracleKey, S3),
+    {error, insufficient_funds} =
+        aetx:check(RTx3, Trees3, CurrHeight2),
+
+    %% Test too high account nonce
+    RTx4 = aeo_test_utils:extend_tx(OracleKey, #{nonce => 0}, S2),
+    {error, account_nonce_too_high} =
+        aetx:check(RTx4, Trees2, CurrHeight2),
+
+    %% Test too low fee
+    RTx5 = aeo_test_utils:extend_tx(OracleKey, #{fee => 0}, S2),
+    {error, too_low_fee} = aetx:check(RTx5, Trees2, CurrHeight2),
+    ok.
+
+extend_oracle(Cfg) ->
+    {OracleKey, S} = register_oracle(Cfg),
+    PrivKey        = aeo_test_utils:priv_key(OracleKey, S),
+    Trees          = aeo_test_utils:trees(S),
+    OTrees         = aec_trees:oracles(Trees),
+    Oracle         = aeo_state_tree:get_oracle(OracleKey, OTrees),
+    Expires0       = aeo_oracles:expires(Oracle),
+    CurrHeight     = 3,
+
+    %% Test that ExtendTX is accepted
+    Tx       = aeo_test_utils:extend_tx(OracleKey, #{ ttl => {delta, 50} }, S),
+    SignedTx = aetx_sign:sign(Tx, PrivKey),
+    {ok, [SignedTx], Trees1} = aec_trees:apply_signed_txs([SignedTx], Trees, CurrHeight),
+    S1       = aeo_test_utils:set_trees(Trees1, S),
+
+    OTrees1  = aec_trees:oracles(Trees1),
+    Oracle1  = aeo_state_tree:get_oracle(OracleKey, OTrees1),
+    Expires1 = aeo_oracles:expires(Oracle1),
+    ct:pal("Expires0 = ~p\nExpires1 = ~p\n", [Expires0, Expires1]),
+    true = (Expires0 + 50) == Expires1,
+
+    {OracleKey, Expires0, Expires1, S1}.
 
 %%%===================================================================
 %%% Query oracle
@@ -107,34 +178,34 @@ query_oracle_negative(Cfg) ->
     %% Test bad sender key
     BadSenderKey = <<42:65/unit:8>>,
     Q1 = aeo_test_utils:query_tx(BadSenderKey, OracleKey, S2),
-    {error, account_not_found} = aeo_query_tx:check(Q1, Trees, CurrHeight),
+    {error, account_not_found} = aetx:check(Q1, Trees, CurrHeight),
 
     %% Test unsufficient funds.
     S3     = aeo_test_utils:set_account_balance(SenderKey, 0, S2),
     Trees1 = aeo_test_utils:trees(S3),
     Q2     = aeo_test_utils:query_tx(SenderKey, OracleKey, S2),
-    {error, insufficient_funds} = aeo_query_tx:check(Q2, Trees1, CurrHeight),
+    {error, insufficient_funds} = aetx:check(Q2, Trees1, CurrHeight),
 
     %% Test too high nonce in account
     Q3 = aeo_test_utils:query_tx(SenderKey, OracleKey, #{nonce => 0}, S2),
-    {error, account_nonce_too_high} = aeo_query_tx:check(Q3, Trees, CurrHeight),
+    {error, account_nonce_too_high} = aetx:check(Q3, Trees, CurrHeight),
 
     %% Test too low query fee
     Q4 = aeo_test_utils:query_tx(SenderKey, OracleKey, #{fee => 0}, S2),
-    {error, too_low_fee} = aeo_query_tx:check(Q4, Trees, CurrHeight),
+    {error, too_low_fee} = aetx:check(Q4, Trees, CurrHeight),
 
     %% Test bad oracle key
     BadOracleKey = <<42:65/unit:8>>,
     Q5 = aeo_test_utils:query_tx(SenderKey, BadOracleKey, S2),
-    {error, oracle_does_not_exist} = aeo_query_tx:check(Q5, Trees, CurrHeight),
+    {error, oracle_does_not_exist} = aetx:check(Q5, Trees, CurrHeight),
 
     %% Test too long query ttl
     Q6 = aeo_test_utils:query_tx(SenderKey, OracleKey, #{ query_ttl => {block, 200} }, S2),
-    {error, too_long_ttl} = aeo_query_tx:check(Q6, Trees, CurrHeight),
+    {error, too_long_ttl} = aetx:check(Q6, Trees, CurrHeight),
 
     %% Test too long response ttl
     Q7 = aeo_test_utils:query_tx(SenderKey, OracleKey, #{ response_ttl => {delta, 50} }, S2),
-    {error, too_long_ttl} = aeo_query_tx:check(Q7, Trees, CurrHeight),
+    {error, too_long_ttl} = aetx:check(Q7, Trees, CurrHeight),
     ok.
 
 query_oracle(Cfg) ->
@@ -146,11 +217,12 @@ query_oracle(Cfg) ->
 
     Q1 = aeo_test_utils:query_tx(SenderKey, OracleKey, S2),
     %% Test that QueryTX is accepted
-    SignedTx = aec_tx_sign:sign(Q1, PrivKey),
+    SignedTx = aetx_sign:sign(Q1, PrivKey),
     {ok, [SignedTx], Trees2} =
-        aec_tx:apply_signed([SignedTx], Trees, CurrHeight),
+        aec_trees:apply_signed_txs([SignedTx], Trees, CurrHeight),
     S3 = aeo_test_utils:set_trees(Trees2, S2),
-    ID = aeo_interaction:id(aeo_interaction:new(Q1, CurrHeight)),
+    {aeo_query_tx, QTx} = aetx:specialize_type(Q1),
+    ID = aeo_query:id(aeo_query:new(QTx, CurrHeight)),
     {OracleKey, ID, S3}.
 
 %%%===================================================================
@@ -165,103 +237,136 @@ query_response_negative(Cfg) ->
     %% Test bad oracle key
     BadOracleKey = <<42:65/unit:8>>,
     RTx1 = aeo_test_utils:response_tx(BadOracleKey, ID, <<"42">>, S1),
-    {error, no_matching_oracle_interaction} =
-        aeo_response_tx:check(RTx1, Trees, CurrHeight),
+    {error, no_matching_oracle_query} =
+        aetx:check(RTx1, Trees, CurrHeight),
 
     %% Test too high nonce for account
     RTx2 = aeo_test_utils:response_tx(OracleKey, ID, <<"42">>, #{nonce => 0}, S1),
     {error, account_nonce_too_high} =
-        aeo_response_tx:check(RTx2, Trees, CurrHeight),
+        aetx:check(RTx2, Trees, CurrHeight),
 
     %% Test fee too low
     RTx3 = aeo_test_utils:response_tx(OracleKey, ID, <<"42">>, #{fee => 0}, S1),
-    {error, too_low_fee} = aeo_response_tx:check(RTx3, Trees, CurrHeight),
+    {error, too_low_fee} = aetx:check(RTx3, Trees, CurrHeight),
 
-    %% Test bad interaction id
-    OIO = aeo_state_tree:get_interaction(OracleKey, ID, aec_trees:oracles(Trees)),
-    BadId = aeo_interaction:id(aeo_interaction:set_sender_nonce(42, OIO)),
+    %% Test bad query id
+    OIO = aeo_state_tree:get_query(OracleKey, ID, aec_trees:oracles(Trees)),
+    BadId = aeo_query:id(aeo_query:set_sender_nonce(42, OIO)),
     RTx4 = aeo_test_utils:response_tx(OracleKey, BadId, <<"42">>, S1),
-    {error, no_matching_oracle_interaction} =
-        aeo_response_tx:check(RTx4, Trees, CurrHeight),
+    {error, no_matching_oracle_query} =
+        aetx:check(RTx4, Trees, CurrHeight),
     ok.
 
 query_response(Cfg) ->
-    {OracleKey, ID, S1}  = query_oracle(Cfg),
-    Trees                = aeo_test_utils:trees(S1),
-    CurrHeight           = 5,
+    {OracleKey, ID, S1} = query_oracle(Cfg),
+    Trees               = aeo_test_utils:trees(S1),
+    CurrHeight          = 5,
 
     %% Test that ResponseTX is accepted
     RTx      = aeo_test_utils:response_tx(OracleKey, ID, <<"42">>, S1),
-    SignedTx = aec_tx_sign:sign(RTx, <<"pkey1">>),
-    {_, _} = redbug:start("aeo_response_tx:check_interaction->return"),
+    SignedTx = aetx_sign:sign(RTx, <<"pkey1">>),
     {ok, [SignedTx], Trees2} =
-        aec_tx:apply_signed([SignedTx], Trees, CurrHeight),
+        aec_trees:apply_signed_txs([SignedTx], Trees, CurrHeight),
     S2 = aeo_test_utils:set_trees(Trees2, S1),
 
-    %% Test that the interaction is now closed.
-    OIO = aeo_state_tree:get_interaction(OracleKey, ID, aec_trees:oracles(Trees2)),
-    true = aeo_interaction:is_closed(OIO),
+    %% Test that the query is now closed.
+    OIO = aeo_state_tree:get_query(OracleKey, ID, aec_trees:oracles(Trees2)),
+    true = aeo_query:is_closed(OIO),
 
     {OracleKey, ID, S2}.
 
 %%%===================================================================
-%%% Prune oracle
+%%% Pruning tests
 %%%===================================================================
 
 prune_oracle(Cfg) ->
     {OracleKey, S} = register_oracle(Cfg),
-    OTrees         = aeo_test_utils:oracles(S),
+    Trees          = aeo_test_utils:trees(S),
+    OTrees         = aec_trees:oracles(Trees),
     Oracle         = aeo_state_tree:get_oracle(OracleKey, OTrees),
     Expires        = aeo_oracles:expires(Oracle),
 
     %% Test that the oracle is pruned
-    Gone  = prune_from_until(0, Expires + 1, OTrees),
-    none  = aeo_state_tree:lookup_oracle(OracleKey, Gone),
+    Gone  = prune_from_until(0, Expires + 1, Trees),
+    none  = aeo_state_tree:lookup_oracle(OracleKey, aec_trees:oracles(Gone)),
 
     %% Test that the oracle remains
-    Left      = prune_from_until(0, Expires, OTrees),
-    Oracle    = aeo_state_tree:get_oracle(OracleKey, Left),
+    Left      = prune_from_until(0, Expires, Trees),
+    Oracle    = aeo_state_tree:get_oracle(OracleKey, aec_trees:oracles(Left)),
     OracleKey = aeo_oracles:owner(Oracle),
     ok.
 
+prune_oracle_extend(Cfg) ->
+    {OracleKey, Exp1, Exp2, S} = extend_oracle(Cfg),
+    Trees                      = aeo_test_utils:trees(S),
+
+    %% Test that the oracle is not pruned prematurely
+    Left1 = prune_from_until(0, Exp1 + 1, Trees),
+    Oracle0   = aeo_state_tree:get_oracle(OracleKey, aec_trees:oracles(Left1)),
+    OracleKey = aeo_oracles:owner(Oracle0),
+
+    %% Test that the oracle is pruned
+    Gone  = prune_from_until(0, Exp2 + 1, Trees),
+    none  = aeo_state_tree:lookup_oracle(OracleKey, aec_trees:oracles(Gone)),
+
+    %% Test that the oracle remains
+    Left2     = prune_from_until(0, Exp2, Trees),
+    Oracle2   = aeo_state_tree:get_oracle(OracleKey, aec_trees:oracles(Left2)),
+    OracleKey = aeo_oracles:owner(Oracle2),
+    ok.
+
 prune_query(Cfg) ->
-    {_OracleKey, ID, S} = query_oracle(Cfg),
-    OTrees  = aeo_test_utils:oracles(S),
-    OIO     = aeo_state_tree:get_interaction(ID, OTrees),
-    Expires = aeo_interaction:expires(OIO),
+    {OracleKey, ID, S} = query_oracle(Cfg),
+    Trees              = aeo_test_utils:trees(S),
+    OTrees             = aec_trees:oracles(Trees),
+    OIO                = aeo_state_tree:get_query(OracleKey, ID, OTrees),
+    Expires            = aeo_query:expires(OIO),
+    SenderKey          = aeo_query:sender_address(OIO),
 
-    %% Test that the interaction is pruned
-    Gone  = prune_from_until(0, Expires + 1, OTrees),
-    none  = aeo_state_tree:lookup_interaction(ID, Gone),
+    %% Test that the query is pruned
+    Gone  = prune_from_until(0, Expires + 1, Trees),
+    none  = aeo_state_tree:lookup_query(OracleKey, ID, aec_trees:oracles(Gone)),
 
-    %% Test that the interaction remains
-    Left  = prune_from_until(0, Expires, OTrees),
-    OIO2  = aeo_state_tree:get_interaction(ID, Left),
-    ID    = aeo_interaction:id(OIO2),
+    %% Check that the query fee was refunded
+    PreAccount  = aec_accounts_trees:get(SenderKey, aec_trees:accounts(Trees)),
+    PostAccount = aec_accounts_trees:get(SenderKey, aec_trees:accounts(Gone)),
+    true = aec_accounts:balance(PreAccount) < aec_accounts:balance(PostAccount),
+
+    %% Test that the query remains
+    Left  = prune_from_until(0, Expires, Trees),
+    OIO2  = aeo_state_tree:get_query(OracleKey, ID, aec_trees:oracles(Left)),
+    ID    = aeo_query:id(OIO2),
     ok.
 
 prune_response(Cfg) ->
-    {_OracleKey, ID, S} = query_response(Cfg),
-    OTrees  = aeo_test_utils:oracles(S),
-    OIO     = aeo_state_tree:get_interaction(ID, OTrees),
-    Expires = aeo_interaction:expires(OIO),
+    {OracleKey, ID, S} = query_response(Cfg),
+    Trees              = aeo_test_utils:trees(S),
+    OTrees             = aec_trees:oracles(Trees),
+    OIO                = aeo_state_tree:get_query(OracleKey, ID, OTrees),
+    Expires            = aeo_query:expires(OIO),
+    SenderKey          = aeo_query:sender_address(OIO),
 
-    %% Test that the interaction is pruned
-    Gone  = prune_from_until(0, Expires + 1, OTrees),
-    none  = aeo_state_tree:lookup_interaction(ID, Gone),
+    %% Test that the query is pruned
+    Gone  = prune_from_until(0, Expires + 1, Trees),
+    none  = aeo_state_tree:lookup_query(OracleKey, ID, aec_trees:oracles(Gone)),
 
-    %% Test that the interaction remains
-    Left  = prune_from_until(0, Expires, OTrees),
-    OIO2  = aeo_state_tree:get_interaction(ID, Left),
-    ID    = aeo_interaction:id(OIO2),
+    %% Check that the query fee was not refunded
+    PreAccount  = aec_accounts_trees:get(SenderKey, aec_trees:accounts(Trees)),
+    PostAccount = aec_accounts_trees:get(SenderKey, aec_trees:accounts(Gone)),
+    true = aec_accounts:balance(PreAccount) == aec_accounts:balance(PostAccount),
+
+    %% Test that the query remains
+    Left  = prune_from_until(0, Expires, Trees),
+    OIO2  = aeo_state_tree:get_query(OracleKey, ID, aec_trees:oracles(Left)),
+    ID    = aeo_query:id(OIO2),
     ok.
 
-prune_from_until(From, Until, OTree) when is_integer(From),
+prune_from_until(From, Until, Trees) when is_integer(From),
                                           is_integer(Until),
                                           From < Until ->
-    do_prune_until(From, Until, OTree).
+    do_prune_until(From, Until, Trees).
 
-do_prune_until(N1, N1, OTree) ->
-    aeo_state_tree:prune(N1, OTree);
-do_prune_until(N1, N2, OTree) ->
-    do_prune_until(N1 + 1, N2, aeo_state_tree:prune(N1, OTree)).
+do_prune_until(N1, N1, Trees) ->
+    aeo_state_tree:prune(N1, Trees);
+do_prune_until(N1, N2, Trees) ->
+    do_prune_until(N1 + 1, N2, aeo_state_tree:prune(N1, Trees)).

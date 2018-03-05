@@ -40,5 +40,15 @@ Make sure you have SSH access to "epoch" remote user.
 ```bash
 PACKAGE="https://github.com/aeternity/epoch/releases/download/v0.2.0-good-peers/ubuntu-epoch-0.2.0.tar.gz"
 cd ansible && ansible-playbook -i inventory/openstack.yml --limit="epoch:&integration" \
-   --extra-vars "remote_package=$PACKAGE" deploy.yml
+   --extra-vars "package=$PACKAGE" deploy.yml
+```
+
+### Secrets
+
+Secrets are managed with [Ansible Vault](docs.ansible.com/ansible/2.4/vault.html).
+There is a tiny bridge vault file `vault-env` that bridges the `ANSIBLE_VAULT_PASSWORD` environment variable as Ansible vault password.
+
+```
+export ANSIBLE_VAULT_PASSWORD="top secret"
+ansible-playbook deploy.yml
 ```

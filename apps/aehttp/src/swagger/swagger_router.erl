@@ -55,9 +55,19 @@ group_paths() ->
 
 get_operations() ->
     #{ 
-        'GetAccountBalance' => #{
-            path => "/v2/account/balance",
-            method => <<"GET">>,
+        'CallContract' => #{
+            path => "/v2/contract/call",
+            method => <<"POST">>,
+            handler => 'swagger_external_handler'
+        },
+        'CompileContract' => #{
+            path => "/v2/contract/compile",
+            method => <<"POST">>,
+            handler => 'swagger_external_handler'
+        },
+        'EncodeCalldata' => #{
+            path => "/v2/contract/encode-calldata",
+            method => <<"POST">>,
             handler => 'swagger_external_handler'
         },
         'GetAccountsBalances' => #{
@@ -75,13 +85,33 @@ get_operations() ->
             method => <<"GET">>,
             handler => 'swagger_external_handler'
         },
+        'GetCommitmentHash' => #{
+            path => "/v2/commitment-hash",
+            method => <<"GET">>,
+            handler => 'swagger_external_handler'
+        },
+        'GetHeaderByHash' => #{
+            path => "/v2/header-by-hash",
+            method => <<"GET">>,
+            handler => 'swagger_external_handler'
+        },
         'GetInfo' => #{
             path => "/v2/info",
             method => <<"GET">>,
             handler => 'swagger_external_handler'
         },
+        'GetName' => #{
+            path => "/v2/name",
+            method => <<"GET">>,
+            handler => 'swagger_external_handler'
+        },
         'GetTop' => #{
             path => "/v2/top",
+            method => <<"GET">>,
+            handler => 'swagger_external_handler'
+        },
+        'GetTx' => #{
+            path => "/v2/tx/:tx_hash",
             method => <<"GET">>,
             handler => 'swagger_external_handler'
         },
@@ -105,10 +135,85 @@ get_operations() ->
             method => <<"POST">>,
             handler => 'swagger_external_handler'
         },
+        'PostContractCall' => #{
+            path => "/v2/tx/contract/call",
+            method => <<"POST">>,
+            handler => 'swagger_external_handler'
+        },
+        'PostContractCallCompute' => #{
+            path => "/v2/tx/contract/call/compute",
+            method => <<"POST">>,
+            handler => 'swagger_external_handler'
+        },
+        'PostContractCreate' => #{
+            path => "/v2/tx/contract/create",
+            method => <<"POST">>,
+            handler => 'swagger_external_handler'
+        },
+        'PostNameClaim' => #{
+            path => "/v2/tx/name/claim",
+            method => <<"POST">>,
+            handler => 'swagger_external_handler'
+        },
+        'PostNamePreclaim' => #{
+            path => "/v2/tx/name/preclaim",
+            method => <<"POST">>,
+            handler => 'swagger_external_handler'
+        },
+        'PostNameRevoke' => #{
+            path => "/v2/tx/name/revoke",
+            method => <<"POST">>,
+            handler => 'swagger_external_handler'
+        },
+        'PostNameTransfer' => #{
+            path => "/v2/tx/name/transfer",
+            method => <<"POST">>,
+            handler => 'swagger_external_handler'
+        },
+        'PostNameUpdate' => #{
+            path => "/v2/tx/name/update",
+            method => <<"POST">>,
+            handler => 'swagger_external_handler'
+        },
+        'PostOracleExtend' => #{
+            path => "/v2/tx/oracle/extend",
+            method => <<"POST">>,
+            handler => 'swagger_external_handler'
+        },
+        'PostOracleQuery' => #{
+            path => "/v2/tx/oracle/query",
+            method => <<"POST">>,
+            handler => 'swagger_external_handler'
+        },
+        'PostOracleRegister' => #{
+            path => "/v2/tx/oracle/register",
+            method => <<"POST">>,
+            handler => 'swagger_external_handler'
+        },
+        'PostOracleResponse' => #{
+            path => "/v2/tx/oracle/response",
+            method => <<"POST">>,
+            handler => 'swagger_external_handler'
+        },
+        'PostSpend' => #{
+            path => "/v2/tx/spend",
+            method => <<"POST">>,
+            handler => 'swagger_external_handler'
+        },
         'PostTx' => #{
             path => "/v2/tx",
             method => <<"POST">>,
             handler => 'swagger_external_handler'
+        },
+        'GetAccountBalance' => #{
+            path => "/v2/account/balance/:account_pubkey",
+            method => <<"GET">>,
+            handler => 'swagger_internal_handler'
+        },
+        'GetAccountTransactions' => #{
+            path => "/v2/account/txs/:account_pubkey",
+            method => <<"GET">>,
+            handler => 'swagger_internal_handler'
         },
         'GetActiveRegisteredOracles' => #{
             path => "/v2/oracles",
@@ -170,6 +275,11 @@ get_operations() ->
             method => <<"GET">>,
             handler => 'swagger_internal_handler'
         },
+        'GetPeers' => #{
+            path => "/v2/debug/peers",
+            method => <<"GET">>,
+            handler => 'swagger_internal_handler'
+        },
         'GetPendingBlockTxsCount' => #{
             path => "/v2/block/txs/count/pending",
             method => <<"GET">>,
@@ -178,6 +288,61 @@ get_operations() ->
         'GetPubKey' => #{
             path => "/v2/account/pub-key",
             method => <<"GET">>,
+            handler => 'swagger_internal_handler'
+        },
+        'GetTransactionFromBlockHash' => #{
+            path => "/v2/block/tx/hash/:hash/:tx_index",
+            method => <<"GET">>,
+            handler => 'swagger_internal_handler'
+        },
+        'GetTransactionFromBlockHeight' => #{
+            path => "/v2/block/tx/height/:height/:tx_index",
+            method => <<"GET">>,
+            handler => 'swagger_internal_handler'
+        },
+        'GetTransactionFromBlockLatest' => #{
+            path => "/v2/block/tx/latest/:tx_index",
+            method => <<"GET">>,
+            handler => 'swagger_internal_handler'
+        },
+        'GetTxsListFromBlockRangeByHash' => #{
+            path => "/v2/block/txs/list/hash",
+            method => <<"GET">>,
+            handler => 'swagger_internal_handler'
+        },
+        'GetTxsListFromBlockRangeByHeight' => #{
+            path => "/v2/block/txs/list/height",
+            method => <<"GET">>,
+            handler => 'swagger_internal_handler'
+        },
+        'PostNameClaimTx' => #{
+            path => "/v2/name-claim-tx",
+            method => <<"POST">>,
+            handler => 'swagger_internal_handler'
+        },
+        'PostNamePreclaimTx' => #{
+            path => "/v2/name-preclaim-tx",
+            method => <<"POST">>,
+            handler => 'swagger_internal_handler'
+        },
+        'PostNameRevokeTx' => #{
+            path => "/v2/name-revoke-tx",
+            method => <<"POST">>,
+            handler => 'swagger_internal_handler'
+        },
+        'PostNameTransferTx' => #{
+            path => "/v2/name-transfer-tx",
+            method => <<"POST">>,
+            handler => 'swagger_internal_handler'
+        },
+        'PostNameUpdateTx' => #{
+            path => "/v2/name-update-tx",
+            method => <<"POST">>,
+            handler => 'swagger_internal_handler'
+        },
+        'PostOracleExtendTx' => #{
+            path => "/v2/oracle-extend-tx",
+            method => <<"POST">>,
             handler => 'swagger_internal_handler'
         },
         'PostOracleQueryTx' => #{
@@ -192,16 +357,6 @@ get_operations() ->
         },
         'PostOracleResponseTx' => #{
             path => "/v2/oracle-response-tx",
-            method => <<"POST">>,
-            handler => 'swagger_internal_handler'
-        },
-        'PostOracleSubscribe' => #{
-            path => "/v2/oracle-subscribe",
-            method => <<"POST">>,
-            handler => 'swagger_internal_handler'
-        },
-        'PostOracleUnsubscribe' => #{
-            path => "/v2/oracle-unsubscribe",
             method => <<"POST">>,
             handler => 'swagger_internal_handler'
         },

@@ -25,8 +25,11 @@
     restart_second/1,
     restart_third/1,
     tx_first_pays_second/1,
+    tx_first_pays_second_more_it_can_afford/1,
     ensure_tx_pools_empty/1,
-    no_system_metrics_logged/1
+    ensure_tx_pools_one_tx/1,
+    report_metrics/1,
+    check_metrics_logged/1
    ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -38,6 +41,7 @@ groups() ->
     [
      {all_nodes, [sequence], [{group, two_nodes},
                               {group, three_nodes},
+                              {group, semantically_invalid_tx},
                               {group, one_blocked}]},
      {two_nodes, [sequence],
       [start_first_node,
@@ -51,7 +55,8 @@ groups() ->
        tx_first_pays_second,
        restart_second,
        restart_first,
-       no_system_metrics_logged]},
+       report_metrics,
+       check_metrics_logged]},
      {three_nodes, [sequence],
       [start_first_node,
        test_subscription,
@@ -62,11 +67,20 @@ groups() ->
        mine_on_second,
        mine_on_third,
        restart_third,
-       no_system_metrics_logged]},
-      {one_blocked, [sequence],
-       [start_first_node,
-        mine_on_first,
-        start_blocked_second]}
+       report_metrics,
+       check_metrics_logged]},
+     {semantically_invalid_tx, [sequence],
+      [start_first_node,
+       mine_on_first,
+       start_second_node,
+       ensure_tx_pools_empty,
+       tx_first_pays_second_more_it_can_afford,
+       mine_on_second,
+       ensure_tx_pools_one_tx]},
+     {one_blocked, [sequence],
+      [start_first_node,
+       mine_on_first,
+       start_blocked_second]}
     ].
 
 suite() ->
@@ -83,15 +97,17 @@ init_per_suite(Config) ->
     ct:log("Environment = ~p", [[{args, init:get_arguments()},
                                  {node, node()},
                                  {cookie, erlang:get_cookie()}]]),
-    %% sync suite should not log any system metrics
-    %% (not automatically verified yet)
     DefCfg = #{<<"metrics">> =>
                    #{<<"rules">> =>
                          [#{<<"name">> => <<"ae.epoch.system.**">>,
-                            <<"actions">> => <<"none">>}]}},
-    aecore_suite_utils:create_configs(Config1, DefCfg, [{add_peers, true}]),
-    aecore_suite_utils:make_multi(Config1),
-    Config1.
+                            <<"actions">> => <<"log">>},
+                          #{<<"name">> => <<"ae.epoch.aecore.**">>,
+                            <<"actions">> => <<"log,send">>}]},
+              <<"chain">> => #{<<"persist">> => true}},
+    Config2 = aec_metrics_test_utils:make_port_map([dev1, dev2, dev3], Config1),
+    aecore_suite_utils:create_configs(Config2, DefCfg, [{add_peers, true}]),
+    aecore_suite_utils:make_multi(Config2),
+    Config2.
 
 end_per_suite(Config) ->
     stop_devs(Config).
@@ -100,6 +116,8 @@ init_per_group(two_nodes, Config) ->
     config({devs, [dev1, dev2]}, Config);
 init_per_group(three_nodes, Config) ->
     config({devs, [dev1, dev2, dev3]}, Config);
+init_per_group(semantically_invalid_tx, Config) ->
+    config({devs, [dev1, dev2]}, Config);
 init_per_group(one_blocked, Config) ->
     Config1 = config({devs, [dev1, dev2]}, Config),
     preblock_second(Config1),
@@ -108,11 +126,19 @@ init_per_group(_Group, Config) ->
     Config.
 
 end_per_group(_, Config) ->
+    ct:log("Metrics: ~p", [aec_metrics_test_utils:fetch_data()]),
+    aec_metrics_test_utils:stop_statsd_loggers(Config),
     stop_devs(Config).
 
 stop_devs(Config) ->
     Devs = proplists:get_value(devs, Config, []),
-    [ aecore_suite_utils:stop_node(Node, Config) || Node <- Devs ],
+    lists:foreach(
+        fun(Node) ->
+            {ok, DbCfg} = node_db_cfg(Node), 
+            aecore_suite_utils:stop_node(Node, Config),
+            aecore_suite_utils:delete_node_db_if_persisted(DbCfg)
+        end,
+        Devs),
     ok.
 
 init_per_testcase(_Case, Config) ->
@@ -133,6 +159,7 @@ start_first_node(Config) ->
     [ Dev1 | _ ] = proplists:get_value(devs, Config),
     aecore_suite_utils:start_node(Dev1, Config),
     aecore_suite_utils:connect(aecore_suite_utils:node_name(Dev1)),
+    ok = aecore_suite_utils:check_for_logs([dev1], Config),
     ok.
 
 start_second_node(Config) ->
@@ -143,7 +170,8 @@ start_second_node(Config) ->
     aecore_suite_utils:connect(N2),
     aecore_suite_utils:await_aehttp(N2),
     ct:log("Peers on dev2: ~p", [rpc:call(N2, aec_peers, all, [], 5000)]),
-    B1 = rpc:call(N1, aec_conductor, top, [], 5000),
+    B1 = rpc:call(N1, aec_chain, top_block, [], 5000),
+    ok = aecore_suite_utils:check_for_logs([dev2], Config),
     true = expect_block(N2, B1).
 
 start_third_node(Config) ->
@@ -154,6 +182,7 @@ start_third_node(Config) ->
     aecore_suite_utils:connect(N3),
     aecore_suite_utils:await_aehttp(N3),
     ct:log("Peers on dev3: ~p", [rpc:call(N3, aec_peers, all, [], 5000)]),
+    ok = aecore_suite_utils:check_for_logs([dev3], Config),
     true = expect_same(T0, Config).
 
 test_subscription(Config) ->
@@ -197,6 +226,12 @@ start_blocked_second(Config) ->
     await_sync_abort(T0, [N1, N2]).
 
 tx_first_pays_second(Config) ->
+    tx_first_pays_second_(Config, fun(_) -> 1 end).
+
+tx_first_pays_second_more_it_can_afford(Config) ->
+    tx_first_pays_second_(Config, fun(Bal1) -> Bal1 + 1 end).
+
+tx_first_pays_second_(Config, AmountFun) ->
     [ Dev1, Dev2 | _ ] = proplists:get_value(devs, Config),
     N1 = aecore_suite_utils:node_name(Dev1),
     N2 = aecore_suite_utils:node_name(Dev2),
@@ -211,7 +246,7 @@ tx_first_pays_second(Config) ->
     Pool11 = Pool21,                % tx pools are ordered
     ok = new_tx(#{node1  => N1,
                   node2  => N2,
-                  amount => 1,
+                  amount => AmountFun(Bal1),
                   sender    => PK1,
                   recipient => PK2,
                   fee    => 1}),
@@ -220,32 +255,60 @@ tx_first_pays_second(Config) ->
     true = ensure_new_tx(N2, NewTx).
 
 ensure_tx_pools_empty(Config) ->
+    ensure_tx_pools_n_txs_(Config, 0).
+
+ensure_tx_pools_one_tx(Config) ->
+    ensure_tx_pools_n_txs_(Config, 1).
+
+ensure_tx_pools_n_txs_(Config, TxsCount) ->
     Ns = [N || {_,N} <- ?config(nodes, Config)],
     retry(
       fun() ->
-              Results = lists:map(
-                          fun(N) ->
-                                  {ok, Pool} = get_pool(N),
-                                  ct:log("Pool (~p) = ~p", [N, Pool]),
-                                  Pool
-                          end, Ns),
-              lists:all(fun([]) -> true;
-                           (_)  -> false
-                        end, Results)
-      end, {?LINE, ensure_tx_pools_empty, Ns}).
+              [APool | RestPools] =
+                  lists:map(
+                    fun(N) ->
+                            case get_pool(N) of
+                                {ok, Pool} when is_list(Pool) ->
+                                    ct:log("Pool (~p) = ~p", [N, Pool]),
+                                    Pool
+                            end
+                    end, Ns),
+              if
+                  length(APool) =:= TxsCount ->
+                      lists:all(fun(P) when P =:= APool -> true;
+                                   (_) -> false
+                                end, RestPools);
+                  true ->
+                      false
+              end
+      end, {?LINE, ensure_tx_pools_n_txs_, TxsCount, Ns}).
 
-no_system_metrics_logged(Config) ->
+report_metrics(Config) ->
+    Ns = [N || {_, N} <- ?config(nodes, Config)],
+    [rpc:call(N, exometer_report, trigger_interval,
+              [aec_metrics_main, default]) || N <- Ns],
+    timer:sleep(1000).
+
+check_metrics_logged(Config) ->
+    %% No system metrics should have been sent to the 'statsd' ports.
+    check_no_system_metrics_sent(),
     %% a user config filter is applied in init_per_suite, which turns off
     %% metrics logging for "ae.epoch.system.**".
     Dir = aecore_suite_utils:shortcut_dir(Config),
     Cmd1 = ["grep peers ", Dir, "/dev?/log/epoch_metrics.log"],
-    Cmd2 = ["grep system ", Dir, "/dev?/log/epoch_metrics.log"],
+    Cmd2 = ["grep aecore ", Dir, "/dev?/log/epoch_metrics.log"],
     Res1 = aecore_suite_utils:cmd_res(aecore_suite_utils:cmd(Cmd1)),
     Res2 = aecore_suite_utils:cmd_res(aecore_suite_utils:cmd(Cmd2)),
     {[_|_], [], _} = Res1,
-    {[]   , [], _} = Res2,
+    {[_|_]   , [], _} = Res2,
     ok.
 
+check_no_system_metrics_sent() ->
+    lists:foreach(
+      fun({_Id, Data}) ->
+              [] = [Line || {_,L} = Line <- Data,
+                            nomatch =/= re:run(L, "^ae\\.epoch\\.system", [])]
+      end, aec_metrics_test_utils:fetch_data()).
 
 mine_again_on_first(Config) ->
     mine_and_compare(aecore_suite_utils:node_name(dev1), Config).
@@ -264,7 +327,9 @@ restart_third(Config) ->
 
 restart_node(Nr, Config) ->
     Dev = lists:nth(Nr, proplists:get_value(devs, Config)),
+    {ok, DbCfg} = node_db_cfg(Dev), 
     aecore_suite_utils:stop_node(Dev, Config),
+    aecore_suite_utils:delete_node_db_if_persisted(DbCfg),
     T0 = os:timestamp(),
     aecore_suite_utils:start_node(Dev, Config),
     N = aecore_suite_utils:node_name(Dev),
@@ -277,9 +342,9 @@ mine_on_third(Config) ->
 
 mine_and_compare(N1, Config) ->
     AllNodes = [N || {_, N} <- ?config(nodes, Config)],
-    PrevTop = rpc:call(N1, aec_conductor, top, [], 5000),
+    PrevTop = rpc:call(N1, aec_chain, top_block, [], 5000),
     aecore_suite_utils:mine_blocks(N1, 1),
-    NewTop = rpc:call(N1, aec_conductor, top, [], 5000),
+    NewTop = rpc:call(N1, aec_chain, top_block, [], 5000),
     true = (NewTop =/= PrevTop),
     Bal1 = get_balance(N1),
     ct:log("Balance on dev1: ~p", [Bal1]),
@@ -359,7 +424,7 @@ check_sync_abort_event(#{sender := From, info := Info}, Nodes) ->
 expect_same_top(Nodes, Tries) when Tries > 0 ->
     Blocks = lists:map(
                fun(N) ->
-                       B = rpc:call(N, aec_conductor, top, [], 5000),
+                       B = rpc:call(N, aec_chain, top_block, [], 5000),
                        {N, B}
                end, Nodes),
     case lists:ukeysort(2, Blocks) of
@@ -405,7 +470,7 @@ expect_block(N, B) ->
           {?LINE, expect_block, N, B}).
 
 expect_block_(N, B) ->
-    Bn = rpc:call(N, aec_conductor, top, [], 5000),
+    Bn = rpc:call(N, aec_chain, top_block, [], 5000),
     case B =:= Bn of
         true ->
             Bal = get_balance(N),
@@ -493,5 +558,15 @@ preblock_second(Config) ->
                                             ]).
 
 config({devs, Devs}, Config) ->
-    [{devs, Devs}, {nodes, [aecore_suite_utils:node_tuple(Dev) || Dev <- Devs]} 
-     | Config].
+    aec_metrics_test_utils:start_statsd_loggers(
+      [{devs, Devs}, {nodes, [aecore_suite_utils:node_tuple(Dev)
+                              || Dev <- Devs]}
+       | Config]).
+
+node_db_cfg(Node) ->
+    {ok, DbCfg} = aecore_suite_utils:get_node_db_config(
+                    fun(M, F, A)->
+                        rpc:call(aecore_suite_utils:node_name(Node),
+                                  M, F, A, 5000)
+                    end),
+    {ok, DbCfg}.

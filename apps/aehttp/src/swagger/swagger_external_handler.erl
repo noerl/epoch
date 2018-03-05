@@ -56,10 +56,26 @@ rest_init(Req0, {Operations, LogicHandler, ValidatorState}) ->
 allowed_methods(
     Req,
     State = #state{
-        operation_id = 'GetAccountBalance'
+        operation_id = 'CallContract'
     }
 ) ->
-    {[<<"GET">>], Req, State};
+    {[<<"POST">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'CompileContract'
+    }
+) ->
+    {[<<"POST">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'EncodeCalldata'
+    }
+) ->
+    {[<<"POST">>], Req, State};
 
 allowed_methods(
     Req,
@@ -88,6 +104,22 @@ allowed_methods(
 allowed_methods(
     Req,
     State = #state{
+        operation_id = 'GetCommitmentHash'
+    }
+) ->
+    {[<<"GET">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'GetHeaderByHash'
+    }
+) ->
+    {[<<"GET">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
         operation_id = 'GetInfo'
     }
 ) ->
@@ -96,7 +128,23 @@ allowed_methods(
 allowed_methods(
     Req,
     State = #state{
+        operation_id = 'GetName'
+    }
+) ->
+    {[<<"GET">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
         operation_id = 'GetTop'
+    }
+) ->
+    {[<<"GET">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'GetTx'
     }
 ) ->
     {[<<"GET">>], Req, State};
@@ -129,6 +177,110 @@ allowed_methods(
     Req,
     State = #state{
         operation_id = 'PostBlock'
+    }
+) ->
+    {[<<"POST">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'PostContractCall'
+    }
+) ->
+    {[<<"POST">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'PostContractCallCompute'
+    }
+) ->
+    {[<<"POST">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'PostContractCreate'
+    }
+) ->
+    {[<<"POST">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'PostNameClaim'
+    }
+) ->
+    {[<<"POST">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'PostNamePreclaim'
+    }
+) ->
+    {[<<"POST">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'PostNameRevoke'
+    }
+) ->
+    {[<<"POST">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'PostNameTransfer'
+    }
+) ->
+    {[<<"POST">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'PostNameUpdate'
+    }
+) ->
+    {[<<"POST">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'PostOracleExtend'
+    }
+) ->
+    {[<<"POST">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'PostOracleQuery'
+    }
+) ->
+    {[<<"POST">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'PostOracleRegister'
+    }
+) ->
+    {[<<"POST">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'PostOracleResponse'
+    }
+) ->
+    {[<<"POST">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
+        operation_id = 'PostSpend'
     }
 ) ->
     {[<<"POST">>], Req, State};
@@ -162,6 +314,25 @@ allowed_methods(Req, State) ->
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 is_authorized(Req, State) ->
     {true, Req, State}.
 
@@ -183,7 +354,27 @@ content_types_accepted(Req, State) ->
 valid_content_headers(
     Req0,
     State = #state{
-        operation_id = 'GetAccountBalance'
+        operation_id = 'CallContract'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'CompileContract'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'EncodeCalldata'
     }
 ) ->
     Headers = [],
@@ -223,6 +414,26 @@ valid_content_headers(
 valid_content_headers(
     Req0,
     State = #state{
+        operation_id = 'GetCommitmentHash'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'GetHeaderByHash'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
         operation_id = 'GetInfo'
     }
 ) ->
@@ -233,7 +444,27 @@ valid_content_headers(
 valid_content_headers(
     Req0,
     State = #state{
+        operation_id = 'GetName'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
         operation_id = 'GetTop'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'GetTx'
     }
 ) ->
     Headers = [],
@@ -274,6 +505,136 @@ valid_content_headers(
     Req0,
     State = #state{
         operation_id = 'PostBlock'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'PostContractCall'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'PostContractCallCompute'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'PostContractCreate'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'PostNameClaim'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'PostNamePreclaim'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'PostNameRevoke'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'PostNameTransfer'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'PostNameUpdate'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'PostOracleExtend'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'PostOracleQuery'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'PostOracleRegister'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'PostOracleResponse'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'PostSpend'
     }
 ) ->
     Headers = [],
