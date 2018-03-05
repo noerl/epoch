@@ -141,7 +141,7 @@ new_header(Uri, Header, AgreedHeight) ->
 %% (including the new Ping) for blocks on that height+1 until we reach the 
 %% RemoteTop or decide that that is an invalid fork.
 
--record(state, {best_header, agreed_on_height = 0}).
+-record(state, {best, agreed_on_height = 0}).
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -163,15 +163,10 @@ handle_call(_, _From, State) ->
 handle_cast({connect, Uri}, State) ->
     aec_peers:add(Uri, _Connect = true),
     {noreply, State};
-handle_cast({start_sync, Uri, RemoteHash, RemoteDifficulty}, State) ->
-    case State#state.best_header == undefined orelse RemoteDifficulty > aec_headers:difficulty(State#state.best_header) of
-        false ->
-            %% No need to synchronize, we're already synchronizing with 
-            %% chain that has higher difficulty
-            lager:debug("do not start sync with ~p under ongoing sync", [Uri]);
-        true ->
-            jobs:enqueue(sync_jobs, {start_sync, Uri, RemoteHash})
-    end,
+handle_cast({start_sync, Uri, RemoteHash, _RemoteDifficulty}, State) ->
+    %% We could decide not to sync if we are already syncing, but that
+    %% opens up for an attac in which someone fakes to have higher difficulty
+    jobs:enqueue(sync_jobs, {start_sync, Uri, RemoteHash}),
     {noreply, State};
 handle_cast({server_get_missing, Uri}, State) ->
     jobs:enqueue(sync_jobs, {server_get_missing, Uri}),
@@ -183,13 +178,17 @@ handle_cast({schedule_ping, Uri}, State) ->
     jobs:enqueue(sync_jobs, {ping, Uri}),
     {noreply, State};
 handle_cast({new_header, Uri, Header, AgreedHeight}, State) ->
-    case State#state.best_header == undefined orelse 
-      aec_headers:difficulty(Header) > aec_headers:difficulty(State#state.best_header) of
-      true ->
-          lager:debug("Received a header with higher difficulty ~p", [Header]),
-          {noreply, State#state{best_header = {Header, Uri}, agreed_on_height = AgreedHeight}};
-      false ->
-          {norepy, State}
+    case State#state.best of
+      {BestHeader, _BestUri} -> 
+          case aec_headers:difficulty(Header) > aec_headers:difficulty(BestHeader) of
+              true ->
+                  lager:debug("Received a header with higher difficulty ~p", [Header]),
+                  {noreply, State#state{best = {Header, Uri}, agreed_on_height = AgreedHeight}};
+              false ->
+                  {norepy, State}
+          end;
+      undefined ->
+          {noreply, State#state{best = {Header, Uri}, agreed_on_height = AgreedHeight}}
     end;
 handle_cast(_, State) ->
     {noreply, State}.
@@ -315,15 +314,19 @@ do_start_sync(Uri, RemoteHash) ->
             %% Get a hash first and work with that.
             LocalHeader = aec_chain:top_header(),
             LocalHeight = aec_headers:height(LocalHeader),
+            RemoteHeight = aec_headers:height(Hdr),
             AgreedHeight = 
                case LocalHeight == 0 of
                     true -> 0;
                     false ->
-                      agree_on_height(Uri, Hdr,  aec_headers:height(Hdr), LocalHeader, LocalHeight, LocalHeight, 1)
+                      agree_on_height(Uri, Hdr, RemoteHeight, LocalHeader, LocalHeight, LocalHeight, 0)
                end,
+            %% The prev_hash of next block should be hash_header of block it builds upon
+            {ok, LocalStart} = aec_chain:get_header_by_height(AgreedHeight),
+            {ok, LocalStartHash} = aec_headers:hash_header(LocalStart),
             new_header(Uri, Hdr, AgreedHeight),
             lager:debug("Agreed upon height (~p): ~p", [Uri, AgreedHeight]),
-            fetch_chain(RemoteHash, Uri, aec_chain:genesis_hash(), true, []);
+            fetch_chain(Uri, AgreedHeight, RemoteHeight, LocalStartHash);
         {error, Reason} ->
             lager:debug("fetching top block (~p) failed: ~p", [Uri, Reason])
     end.
@@ -344,15 +347,14 @@ agree_on_height(Uri, RHeader, RH, LHeader, LH, Max, Min) when RH == LH ->
              end;
         false -> 
              lager:debug("UNEQUAL: ~p =/= ~p", [RHeader, LHeader]),
-             %% We disagree, Local on a fork compared to remote
-             %% check half-way
+             %% We disagree. Local on a fork compared to remote. Check half-way
              Middle = (Min + LH) div 2,
              case Min < Middle of
                  true ->
                      {ok, LocalAtHeight} = aec_chain:get_header_by_height(Middle),
                      agree_on_height(Uri, RHeader, RH, LocalAtHeight, Middle, LH, Min);
                 false ->
-                     Min
+                    Min
              end
     end;
 agree_on_height(Uri, _, RH, LHeader, LH, Max, Min) when RH =/= LH -> 
@@ -370,50 +372,35 @@ do_server_get_missing(Uri) ->
     do_get_missing_blocks(Uri),
     aec_events:publish(chain_sync, {server_done, Uri}).
 
-%% fetch_chain(Uri, GHash) ->
-%%     case aeu_requests:top(Uri) of
-%%         {ok, Hdr} ->
-%%             lager:debug("Top hdr (~p): ~p", [Uri, pp(Hdr)]),
-%%             {ok, Hash} = aec_headers:hash_header(Hdr),
-%%             fetch_chain(Hash, Uri, GHash, true, []);
-%%         {error, Reason} ->
-%%             lager:debug("fetching top block (~p) failed: ~p", [Uri, Reason])
-%%     end.
 
-%% Fetch the chain, keep track of if we can be connected to genesis.
-%% Initially we can be connected, later we can only be connected
-%% after we have actually fetched a block from another peer, and then
-%% found a block locally (in the extreme case that local block will
-%% be the genesis).
-fetch_chain(GHash, Uri, GHash, _MaybeConnected, Acc) ->
-    chain_fetched(Uri, Acc);
-fetch_chain(Hash, Uri, GHash, MaybeConnected, Acc) ->
-    case do_fetch_block(Hash, Uri) of
-        {ok, false, Block} -> %% We already have this block
-            case MaybeConnected andalso is_connected_to_genesis(Hash) of
-                true ->
-                    %% We are done
-                    chain_fetched(Uri, Acc);
-                false ->
-                    Hdr = aec_blocks:to_header(Block),
-                    fetch_chain(aec_headers:prev_hash(Hdr), Uri, GHash, false, Acc)
-            end;
-        {ok, true, Block} -> %% We fetched this block
-            Hdr = aec_blocks:to_header(Block),
-            fetch_chain(aec_headers:prev_hash(Hdr), Uri, GHash, true, [{Hash, Block}|Acc]);
-        {error, _} ->
-            %% Post the bit we have
-            chain_fetched(Uri, Acc)
+fetch_chain(Uri, FromHeight, ToHeight, _Hash) when FromHeight == ToHeight ->
+    aec_events:publish(chain_sync, {client_done, Uri});
+fetch_chain(Uri, FromH, ToH, HashFromH) when FromH < ToH ->
+    %% We could opt for getting the header first and check that it fits on chain
+    %% but then we need in 2 requests the most common case 
+    case aeu_requests:get_block_by_height(Uri, FromH + 1) of
+        {ok, Block} ->
+             Header = aec_blocks:to_header(Block),
+             PrevHash = aec_blocks:prev_hash(Block),
+             lager:debug("New block fetched (~p): ~p", [Uri, pp(Header)]),        
+             case {PrevHash == HashFromH, aec_headers:hash_header(Header)} of
+                 {true, {ok, NewHash}} -> 
+                     %% This header extends the chain
+                     lager:debug("Calling post_block(~p)", [pp(Block)]),
+                     case aec_conductor:add_synced_block(Block) of
+                         ok ->
+                             fetch_chain(Uri, FromH + 1, ToH, NewHash);  
+                         {error, _} = Error ->
+                             Error
+                     end;
+                 _ ->
+                     lager:info("Abort sync due to non-fitting block ~p =/= ", [Header]),
+                     {error, header_mismatch}
+             end;
+      {error, Reason} ->
+          {error, Reason}
     end.
 
-is_connected_to_genesis(Hash) ->
-    lager:debug("Checking if ~p is connected to genesis", [pp(Hash)]),
-    aec_chain:hash_is_connected_to_genesis(Hash).
-
-chain_fetched(Uri, Acc) ->
-    try_write_blocks(Acc),
-    do_get_missing_blocks(Uri),
-    aec_events:publish(chain_sync, {client_done, Uri}).
 
 fetch_block(Hash, Uri) ->
     case do_fetch_block_ext(Hash, Uri) of
