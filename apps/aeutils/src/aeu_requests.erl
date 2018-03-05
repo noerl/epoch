@@ -38,6 +38,7 @@
          top/1,
          get_header_by_hash/2,
          get_header_by_height/2,
+         get_block_by_height/2,
          get_block/2,
          transactions/1,
          send_tx/2,
@@ -158,6 +159,21 @@ get_header_by_height(Uri, Height) when is_integer(Height) ->
             lager:debug("unexpected response (~p): ~p", [Uri, Response]),
             {error, unexpected_response}
     end.
+
+-spec get_block_by_height(http_uri_uri(), non_neg_integer()) -> response(aec_headers:header()).
+get_block_by_height(Uri, Height) when is_integer(Height) ->
+    Response = process_request(Uri, 'GetBlockByHeight', [{"height", integer_to_list(Height)}]),
+    case Response of
+        {ok, 200, Data} ->
+            {ok, Block} = aec_blocks:deserialize_from_map(Data);
+        {error, _Reason} = Error ->
+            Error;
+        _ ->
+            %% Should have been turned to {error, _} by swagger validation
+            lager:debug("unexpected response (~p): ~p", [Uri, Response]),
+            {error, unexpected_response}
+    end.
+
 
 
 -spec get_block(http_uri_uri(), binary()) -> response(aec_blocks:block()).
